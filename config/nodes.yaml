@@ -1,0 +1,45 @@
+# CVMFS Infrastructure Node Configuration
+# This file defines all VMs in the CVMFS infrastructure
+
+nodes:
+  cvmfs-gateway-stratum0:
+    ip: '192.168.58.10'
+    memory: 4096
+    cpus: 4
+    role: 'gateway-stratum0'
+    description: 'Combined Gateway and Stratum-0 authoritative server'
+    
+  cvmfs-publisher1:
+    ip: '192.168.58.15'
+    memory: 1024
+    cpus: 2
+    role: 'publisher'
+    description: 'Publisher node 1 - publishes content via gateway'
+    
+  cvmfs-publisher2:
+    ip: '192.168.58.16'
+    memory: 1024
+    cpus: 2
+    role: 'publisher'
+    description: 'Publisher node 2 - publishes content via gateway'
+    
+  cvmfs-stratum1:
+    ip: '192.168.58.11'
+    memory: 4096
+    cpus: 4
+    role: 'stratum1'
+    description: 'Stratum-1 replica server - mirrors content from Stratum-0'
+    
+  squid-proxy:
+    ip: '192.168.58.14'
+    memory: 1024
+    cpus: 1
+    role: 'proxy'
+    description: 'Squid caching proxy for CVMFS clients'
+    
+  cvmfs-client:
+    ip: '192.168.58.12'
+    memory: 2048
+    cpus: 2
+    role: 'client'
+    description: 'CVMFS client for testing repository access'

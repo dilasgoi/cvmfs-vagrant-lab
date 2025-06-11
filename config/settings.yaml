@@ -1,0 +1,44 @@
+# Global Settings for CVMFS Infrastructure
+
+# Vagrant VM settings
+vagrant:
+  box: 'bento/ubuntu-22.04'
+  boot_timeout: 600
+  insert_key: false
+
+# CVMFS configuration
+cvmfs:
+  domain: 'lab.local'
+  repository_name: 'software.lab.local'
+  repo_owner: 'vagrant'
+  
+  # Gateway settings
+  gateway_port: 4929
+  gateway_max_lease_time: 7200
+  gateway_num_receivers: 2
+  gateway_receiver_timeout: 7200
+  gateway_fe_tcp_port_begin: 4930
+  gateway_fe_tcp_port_end: 4950
+  
+  # Client settings
+  cache_base: '/var/lib/cvmfs'
+  cache_quota_limit: 2000
+  shared_cache: false
+
+# Squid proxy configuration  
+proxy:
+  port: 3128
+  cache_mem: '256 MB'
+  maximum_object_size: '1024 MB'
+  cache_dir_size: 4000
+  
+# Repository initial content
+repository:
+  create_initial_content: true
+  test_directories:
+    - bin
+    - lib
+    - test
+    - doc
+    - data
+
