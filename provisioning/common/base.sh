@@ -14,8 +14,8 @@ log_info "IP: $NODE_IP"
 # Fix potential SSH issues
 configure_ssh
 
-# Update system
-update_system
+# Update system. Disabled by default as it is time consuming.
+# update_system
 
 # Install base packages
 install_base_packages
