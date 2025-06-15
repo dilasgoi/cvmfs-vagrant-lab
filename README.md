@@ -70,7 +70,7 @@ cvmfs-vagrant/
 │   └── roles/           # Role-specific setup scripts
 ├── scripts/
 │   ├── helpers/         # Utility scripts
-│   └── utils/           # CVMFS-specific utilities
+│   └── utils/           # CVMFS-specific and Vagrant utilities
 ├── tests/               # Comprehensive test suite
 └── Vagrantfile          # Vagrant configuration
 ```
