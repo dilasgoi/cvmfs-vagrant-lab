@@ -295,3 +295,103 @@ cvmfs-reload                            # Reload configuration
 - [CVMFS Technical Report](https://cds.cern.ch/record/2667540)
 - [CVMFS GitHub Repository](https://github.com/cvmfs/cvmfs)
 
+---
+
+## Appendix: Box Management System
+
+This project includes an box management system that speeds up VM deployment after initial setup by creating pre-configured custom boxes.
+
+### How It Works
+
+**Initial Deployment (Slow Path):**
+- Uses base Ubuntu boxes (`bento/ubuntu-22.04`)
+- Runs full provisioning scripts (installs packages, configures CVMFS services)
+- Takes 10-15 minutes for all 6 VMs
+
+**Custom Box Deployment (Fast Path):**
+- Uses pre-configured box files stored in `boxes/` directory
+- Skips all provisioning (everything already installed and configured)
+- Takes 2-4 minutes for all 6 VMs 
+
+The system automatically detects when custom boxes are available and uses them instead of base boxes with provisioning.
+
+### Box Management Commands
+
+#### Creating Custom Boxes
+```bash
+# Package all running VMs into custom boxes
+scripts/utils/box-manager.sh package-all
+
+# Package specific VM only
+scripts/utils/box-manager.sh package cvmfs-gateway-stratum0
+```
+
+#### Managing Boxes
+```bash
+# List available custom boxes and their status
+scripts/utils/box-manager.sh list
+
+# Remove all custom boxes (forces fresh rebuild next time)
+scripts/utils/box-manager.sh clean
+
+# Show available commands
+scripts/utils/box-manager.sh --help
+```
+
+### Typical Workflow
+
+#### First Time Setup
+```bash
+# 1. Initial deployment (slow - 10-15 minutes)
+vagrant up
+
+# 2. Create custom boxes after everything is working
+scripts/utils/box-manager.sh package-all
+
+# 3. Test fast deployment
+vagrant destroy -f
+vagrant up  # Now uses custom boxes - only 2-4 minutes!
+```
+
+#### Daily Development
+```bash
+# Fast environment recreation
+vagrant destroy -f
+vagrant up  # Uses custom boxes automatically
+```
+
+#### When Updating Configurations
+```bash
+# Force fresh provisioning when you modify configs/scripts
+scripts/utils/box-manager.sh clean
+vagrant up  # Full provisioning with your changes
+
+# Re-package after testing
+scripts/utils/box-manager.sh package-all
+```
+
+### When to Use Each Approach
+
+**Use Custom Boxes (Fast Path) For:**
+- Daily development work
+- Testing CVMFS scenarios
+- Demonstrations and workshops
+- Quick environment recreation
+- Reproducible testing environments
+
+**Use Fresh Provisioning (Slow Path) For:**
+- Updating configuration files in `config/`
+- Modifying provisioning scripts in `provisioning/`
+- Testing infrastructure changes
+- Getting latest package versions
+- Initial project setup
+
+### Technical Details
+
+- **Box Storage**: Custom boxes are stored in `boxes/` directory
+- **Box Size**: Each box is approximately 800MB-1.5GB (compressed)
+- **Detection**: Vagrantfile automatically detects available custom boxes
+- **Fallback**: If custom box doesn't exist, automatically uses base box + provisioning
+- **Cleanup**: Custom boxes can be safely deleted - system falls back to provisioning
+
+The box management system maintains full compatibility with standard Vagrant workflows while providing significant performance improvements for repeated deployments.
