@@ -2,7 +2,7 @@ name: Deploy HPC Software Stack
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'software-stack/**'
   workflow_dispatch:
