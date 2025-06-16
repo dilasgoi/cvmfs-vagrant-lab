@@ -1,0 +1,22 @@
+# Example OpenMPI EasyConfig
+# Mock build for CVMFS demonstration
+
+name = 'OpenMPI'
+version = '4.1.5'
+
+homepage = 'https://www.open-mpi.org/'
+description = """The Open MPI Project is an open source MPI-3 implementation.
+This is a mock installation for CVMFS demo."""
+
+toolchain = {'name': 'GCC', 'version': '12.3.0'}
+
+# Production would have:
+# source_urls = ['https://www.open-mpi.org/software/ompi/v%(version_major_minor)s/downloads']
+# sources = [SOURCELOWER_TAR_BZ2]
+
+dependencies = [
+    ('zlib', '1.2.13'),
+    ('hwloc', '2.9.1'),
+]
+
+moduleclass = 'mpi'

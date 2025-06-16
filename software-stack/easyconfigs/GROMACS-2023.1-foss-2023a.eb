@@ -1,0 +1,28 @@
+# Example EasyConfig for HPC Software Stack
+# This would normally build GROMACS, but is mocked for demo purposes
+
+name = 'GROMACS'
+version = '2023.1'
+
+homepage = 'https://www.gromacs.org'
+description = """
+GROMACS is a versatile package for molecular dynamics simulations.
+This is a mock installation for CVMFS demo purposes.
+"""
+
+toolchain = {'name': 'foss', 'version': '2023a'}
+
+# In production, these would be real sources
+# source_urls = ['https://ftp.gromacs.org/pub/gromacs/']
+# sources = [SOURCELOWER_TAR_GZ]
+
+# Mock build for demonstration
+builddependencies = [
+    ('CMake', '3.26.3'),
+]
+
+dependencies = [
+    ('Python', '3.11.3'),
+]
+
+moduleclass = 'bio'

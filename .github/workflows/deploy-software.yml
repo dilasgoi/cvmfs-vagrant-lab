@@ -1,0 +1,209 @@
+name: Deploy HPC Software Stack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'software-stack/**'
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
+        required: false
+        type: string
+
+env:
+  CVMFS_REPOSITORY: software.lab.local
+
+jobs:
+  deploy-structure:
+    runs-on: [self-hosted, linux, cvmfs-publisher]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check and deploy structure
+        run: |
+          # Determine quarter
+          if [[ -n "${{ inputs.quarter }}" ]]; then
+            QUARTER="${{ inputs.quarter }}"
+          else
+            QUARTER=$(date +"%Y.Q$(( ($(date +%-m)-1)/3+1 ))")
+          fi
+          echo "Target quarter: $QUARTER"
+          
+          # Check if structure exists
+          if vagrant ssh cvmfs-gateway-stratum0 -c "test -f /cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" 2>/dev/null; then
+            echo "✓ Structure already exists for $QUARTER"
+          else
+            echo "Creating structure for $QUARTER..."
+            vagrant ssh cvmfs-gateway-stratum0 < software-stack/deploy-stack-structure.sh
+          fi
+
+  deploy-software:
+    needs: deploy-structure
+    runs-on: [self-hosted, linux, cvmfs-publisher, "${{ matrix.arch }}"]
+    strategy:
+      matrix:
+        include:
+          - arch: x86-64-v3
+            cvmfs_arch: intel/haswell
+            runner: cvmfs-publisher1
+          - arch: x86-64-v4
+            cvmfs_arch: intel/skylake_avx512
+            runner: cvmfs-publisher2
+      max-parallel: 1
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure environment
+        run: |
+          # Set quarter
+          if [[ -n "${{ inputs.quarter }}" ]]; then
+            QUARTER="${{ inputs.quarter }}"
+          else
+            QUARTER=$(date +"%Y.Q$(( ($(date +%-m)-1)/3+1 ))")
+          fi
+          echo "QUARTER=$QUARTER" >> $GITHUB_ENV
+          echo "CVMFS_ARCH=${{ matrix.cvmfs_arch }}" >> $GITHUB_ENV
+          echo "STACK_PATH=/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64/${{ matrix.cvmfs_arch }}" >> $GITHUB_ENV
+      
+      - name: Start CVMFS transaction
+        id: transaction
+        run: |
+          echo "Starting transaction for ${{ matrix.cvmfs_arch }}..."
+          
+          # Cleanup any stuck transactions
+          sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY 2>/dev/null || true
+          
+          # Start transaction
+          if sudo -u vagrant cvmfs_server transaction $CVMFS_REPOSITORY; then
+            echo "✓ Transaction started"
+            echo "transaction_started=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to start transaction"
+            exit 1
+          fi
+      
+      - name: Deploy mock software with EasyBuild
+        run: |
+          echo "Deploying software for ${{ matrix.cvmfs_arch }}..."
+          
+          # Check if we have easyconfigs to process
+          EB_FILES=$(find software-stack/easyconfigs -name "*.eb" 2>/dev/null || true)
+          
+          if [[ -n "$EB_FILES" ]]; then
+            for eb in $EB_FILES; do
+              echo "Processing $(basename $eb)..."
+              
+              # Extract software info
+              EB_NAME=$(basename "$eb" .eb)
+              SOFTWARE=$(echo "$EB_NAME" | cut -d- -f1)
+              VERSION=$(echo "$EB_NAME" | cut -d- -f2)
+              TOOLCHAIN=$(echo "$EB_NAME" | cut -d- -f3,4)
+              
+              # Create mock installation
+              INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
+              sudo mkdir -p "$INSTALL_DIR/bin"
+              
+              # Create mock binary
+              cat << BINARY | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
+          #!/bin/bash
+          echo "$SOFTWARE version $VERSION"
+          echo "Architecture: ${{ matrix.cvmfs_arch }}"
+          echo "Toolchain: $TOOLCHAIN"
+          echo "Quarter: $QUARTER"
+          echo "This is a mock installation for demonstration"
+          BINARY
+              sudo chmod +x "$INSTALL_DIR/bin/$SOFTWARE"
+              
+              # Create module file
+              MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
+              sudo mkdir -p "$MODULE_DIR"
+              
+              cat << MODULE | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
+          -- -*- lua -*-
+          help([[
+          $SOFTWARE version $VERSION
+          Built with toolchain: $TOOLCHAIN
+          Architecture: ${{ matrix.cvmfs_arch }}
+          ]])
+          
+          whatis("Name: $SOFTWARE")
+          whatis("Version: $VERSION")
+          whatis("Description: Mock $SOFTWARE for CVMFS demo")
+          
+          local root = "$INSTALL_DIR"
+          
+          prepend_path("PATH", pathJoin(root, "bin"))
+          prepend_path("LD_LIBRARY_PATH", pathJoin(root, "lib"))
+          
+          setenv("${SOFTWARE^^}_ROOT", root)
+          MODULE
+              
+              echo "✓ Installed $SOFTWARE/$VERSION-$TOOLCHAIN"
+            done
+          else
+            echo "No EasyBuild configs found, creating example software..."
+            
+            # Create example software
+            EXAMPLE_DIR="$STACK_PATH/software/example-hpc/1.0"
+            sudo mkdir -p "$EXAMPLE_DIR/bin"
+            
+            cat << EXAMPLE | sudo tee "$EXAMPLE_DIR/bin/example-hpc" > /dev/null
+          #!/bin/bash
+          echo "Example HPC Application v1.0"
+          echo "Architecture: ${{ matrix.cvmfs_arch }}"
+          echo "Quarter: $QUARTER"
+          echo "Runner: ${{ matrix.runner }}"
+          EXAMPLE
+            sudo chmod +x "$EXAMPLE_DIR/bin/example-hpc"
+          fi
+          
+          # Create deployment marker
+          echo "Deployed from GitHub Actions" | sudo tee "$STACK_PATH/.last-deploy-$(date +%s)" > /dev/null
+      
+      - name: Publish transaction
+        if: always() && steps.transaction.outputs.transaction_started == 'true'
+        run: |
+          echo "Publishing changes..."
+          if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
+            echo "✅ Published successfully!"
+          else
+            echo "❌ Publish failed, aborting..."
+            sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY || true
+            exit 1
+          fi
+
+  summary:
+    needs: [deploy-structure, deploy-software]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment Summary
+        run: |
+          QUARTER="${{ inputs.quarter }}"
+          if [[ -z "$QUARTER" ]]; then
+            QUARTER=$(date +"%Y.Q$(( ($(date +%-m)-1)/3+1 ))")
+          fi
+          
+          echo "## 📦 HPC Software Stack Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Quarter:** $QUARTER" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.deploy-software.result }}" == "success" ]]; then
+            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Software deployed to:" >> $GITHUB_STEP_SUMMARY
+            echo "- \`/cvmfs/${{ env.CVMFS_REPOSITORY }}/versions/$QUARTER/software/linux/x86_64/intel/haswell/\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`/cvmfs/${{ env.CVMFS_REPOSITORY }}/versions/$QUARTER/software/linux/x86_64/intel/skylake_avx512/\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Access with:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "module use /cvmfs/${{ env.CVMFS_REPOSITORY }}/versions/current/software/linux/x86_64/intel/haswell/modules/all" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs for details." >> $GITHUB_STEP_SUMMARY
+          fi

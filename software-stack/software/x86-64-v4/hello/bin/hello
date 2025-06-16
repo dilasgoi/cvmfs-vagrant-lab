@@ -1,0 +1,4 @@
+#!/bin/bash
+echo "Hello from CVMFS!"
+echo "Architecture: x86-64-v4 (AVX512)"
+echo "This is a pre-built binary example"

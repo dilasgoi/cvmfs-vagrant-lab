@@ -1,0 +1,15 @@
+# Example EasyConfig - Hello World
+name = 'Hello'
+version = '1.0'
+
+homepage = 'https://example.com'
+description = """A simple hello world program for testing CVMFS deployment"""
+
+toolchain = {'name': 'GCCcore', 'version': '12.3.0'}
+
+# This is a mock build for demonstration
+# In production, you would have:
+# sources = ['hello-%(version)s.tar.gz']
+# source_urls = ['https://example.com/downloads/']
+
+moduleclass = 'tools'
