@@ -2,7 +2,7 @@ name: Deploy HPC Software Stack
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
     paths:
       - 'software-stack/**'
   workflow_dispatch:
@@ -31,13 +31,26 @@ jobs:
           fi
           echo "Target quarter: $QUARTER"
           
-          # Check if structure exists
-          if vagrant ssh cvmfs-gateway-stratum0 -c "test -f /cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" 2>/dev/null; then
+          # Check if we're on a publisher VM and can access the gateway
+          GATEWAY_IP="192.168.58.10"
+          
+          # First, copy the deploy script to a temporary location
+          DEPLOY_SCRIPT="/tmp/deploy-stack-structure-$.sh"
+          cp software-stack/deploy-stack-structure.sh "$DEPLOY_SCRIPT"
+          
+          # Check if structure exists on gateway
+          if ssh -o StrictHostKeyChecking=no vagrant@$GATEWAY_IP "test -f /cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" 2>/dev/null; then
             echo "✓ Structure already exists for $QUARTER"
           else
             echo "Creating structure for $QUARTER..."
-            vagrant ssh cvmfs-gateway-stratum0 < software-stack/deploy-stack-structure.sh
+            # Copy and execute the deploy script on the gateway
+            scp -o StrictHostKeyChecking=no "$DEPLOY_SCRIPT" vagrant@$GATEWAY_IP:/tmp/
+            ssh -o StrictHostKeyChecking=no vagrant@$GATEWAY_IP "bash /tmp/$(basename $DEPLOY_SCRIPT)"
+            ssh -o StrictHostKeyChecking=no vagrant@$GATEWAY_IP "rm -f /tmp/$(basename $DEPLOY_SCRIPT)"
           fi
+          
+          # Cleanup
+          rm -f "$DEPLOY_SCRIPT"
 
   deploy-software:
     needs: deploy-structure
