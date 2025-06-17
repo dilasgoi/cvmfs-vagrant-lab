@@ -109,17 +109,23 @@ jobs:
               VERSION=$(echo "$EB_NAME" | cut -d- -f2)
               TOOLCHAIN=$(echo "$EB_NAME" | cut -d- -f3,4 || echo "system")
               
+              echo "    Software: $SOFTWARE"
+              echo "    Version: $VERSION"
+              echo "    Toolchain: $TOOLCHAIN"
+              
               # Create installation
               INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
+              echo "    Creating directory: $INSTALL_DIR/bin"
               sudo mkdir -p "$INSTALL_DIR/bin"
               
-              # Create mock binary using printf instead of heredoc
-              BINARY_CONTENT="#!/bin/bash\n"
-              BINARY_CONTENT="${BINARY_CONTENT}echo \"$SOFTWARE version $VERSION\"\n"
-              BINARY_CONTENT="${BINARY_CONTENT}echo \"Architecture: $CVMFS_ARCH (\$(hostname))\"\n"
-              BINARY_CONTENT="${BINARY_CONTENT}echo \"Toolchain: $TOOLCHAIN\"\n"
-              BINARY_CONTENT="${BINARY_CONTENT}echo \"Quarter: $QUARTER\"\n"
-              printf "$BINARY_CONTENT" | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
+              # Create mock binary - use echo with -e flag for escape sequences
+              {
+                echo "#!/bin/bash"
+                echo "echo \"$SOFTWARE version $VERSION\""
+                echo "echo \"Architecture: $CVMFS_ARCH (\$(hostname))\""
+                echo "echo \"Toolchain: $TOOLCHAIN\""
+                echo "echo \"Quarter: $QUARTER\""
+              } | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
               
               sudo chmod +x "$INSTALL_DIR/bin/$SOFTWARE"
               

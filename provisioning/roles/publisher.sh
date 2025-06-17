@@ -139,18 +139,36 @@ setup_github_runner() {
 $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server transaction $REPOSITORY_NAME
 $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server publish $REPOSITORY_NAME
 $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server abort -f $REPOSITORY_NAME
+$RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server abort $REPOSITORY_NAME
 $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server list
 
 # Allow runner to manage files within CVMFS mount during transactions
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/cp -r * /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/rm -rf /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/mv * /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/chmod -R * /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/rsync * /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/find /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/ln -s * /cvmfs/$REPOSITORY_NAME/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /cvmfs/$REPOSITORY_NAME/*
+# Directory operations
+$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /cvmfs/$REPOSITORY_NAME/versions/*
+
+# File operations
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/tee -a /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/printf *
+$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/echo *
+
+# Symlink operations
+$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/ln -s * /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/rm -f /cvmfs/$REPOSITORY_NAME/versions/current
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/rm -f /cvmfs/$REPOSITORY_NAME/versions/current
+
+# Permission operations
+$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/chmod +x /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/chmod +x /cvmfs/$REPOSITORY_NAME/versions/*
+
+# Test operations
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/test -f /cvmfs/$REPOSITORY_NAME/versions/*
+
+# Additional operations for deployment
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/find /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/cat /cvmfs/$REPOSITORY_NAME/versions/*
+$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/touch /cvmfs/$REPOSITORY_NAME/versions/*
 EOF
     chmod 440 /etc/sudoers.d/github-runner
 
@@ -191,6 +209,7 @@ WorkingDirectory=$RUNNER_DIR
 ExecStart=$RUNNER_DIR/run.sh
 Environment="CVMFS_REPOSITORY=$REPOSITORY_NAME"
 Environment="ARCHITECTURE=$ARCH_LABEL"
+Environment="CVMFS_ARCH=$CVMFS_ARCH"
 Environment="NODE_NAME=$NODE_NAME"
 Environment="REPO_OWNER=$REPO_OWNER"
 Restart=always
@@ -300,6 +319,7 @@ EOF
 
     # Save architecture info
     echo "$ARCH_LABEL" > /etc/cvmfs-arch
+    echo "$CVMFS_ARCH" > /etc/cvmfs-arch-path
 }
 
 # Create helper scripts
@@ -388,6 +408,7 @@ EOF
 echo "=== CVMFS Publisher Information ==="
 echo "Node: $NODE_NAME"
 echo "Architecture: $ARCH_LABEL ($ARCH_FEATURES)"
+echo "CVMFS Architecture: $CVMFS_ARCH"
 echo "Repository: $REPOSITORY_NAME"
 echo "Gateway: http://$GATEWAY_IP:$GATEWAY_PORT/api/v1"
 echo
@@ -430,6 +451,7 @@ sudo mkdir -p $(dirname $TEST_FILE)
 echo "Test publish from $(hostname) at $(date)" | sudo tee $TEST_FILE > /dev/null
 echo "Publisher: $(whoami)" | sudo tee -a $TEST_FILE > /dev/null
 echo "Architecture: $(cat /etc/cvmfs-arch)" | sudo tee -a $TEST_FILE > /dev/null
+echo "CVMFS Architecture: $(cat /etc/cvmfs-arch-path)" | sudo tee -a $TEST_FILE > /dev/null
 
 echo "3. Publishing changes..."
 sudo -u vagrant cvmfs_server publish software.lab.local || exit 1
@@ -482,6 +504,7 @@ main() {
 
     log_success "Publisher setup complete!"
     log_info "Architecture: $ARCH_LABEL ($ARCH_FEATURES)"
+    log_info "CVMFS Architecture: $CVMFS_ARCH"
     log_info "Use 'register-github-runner <repo-url> <token>' to activate CI/CD"
     log_info "Run '/home/vagrant/test_publish.sh' to test publishing"
     log_info "Run 'publish-info' for repository information"
