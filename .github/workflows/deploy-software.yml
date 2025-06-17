@@ -16,6 +16,17 @@ on:
         required: false
         default: 'current'
         type: string
+  workflow_call:
+    inputs:
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
+        required: false
+        type: string
+      compat_version:
+        description: 'Compat layer version to use (e.g., 2024.2)'
+        required: false
+        default: 'current'
+        type: string
 
 env:
   CVMFS_REPOSITORY: software.lab.local
