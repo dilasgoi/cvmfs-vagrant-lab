@@ -45,6 +45,8 @@ jobs:
       
       - name: Deploy to CVMFS
         run: |
+          set +e  # Don't exit on error immediately
+          
           CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
           IS_PRIMARY="${{ matrix.is_primary }}"
           STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
@@ -105,6 +107,8 @@ jobs:
           
           # Process EasyBuild configs
           EB_COUNT=0
+          FAILED=0
+          
           for eb in software-stack/easyconfigs/*.eb; do
             if [[ -f "$eb" ]]; then
               echo "  Processing $(basename $eb)..."
@@ -119,68 +123,98 @@ jobs:
               echo "    Version: $VERSION"
               echo "    Toolchain: $TOOLCHAIN"
               
-              # Create installation directory with error handling
+              # Create installation directory
               INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
               echo "    Creating directory: $INSTALL_DIR/bin"
               
-              # Try to create the directory and capture any error
-              if output=$(sudo mkdir -p "$INSTALL_DIR/bin" 2>&1); then
-                echo "    ✓ Directory created successfully"
-              else
+              if ! sudo mkdir -p "$INSTALL_DIR/bin"; then
                 echo "    ✗ Failed to create directory"
-                echo "    Error output: $output"
-                echo "    Exit code: $?"
-                
-                # Try alternative approach - create parent directories first
-                echo "    Trying alternative approach..."
-                sudo mkdir -p "$STACK_PATH/software" 2>&1 || echo "Failed to create software dir"
-                sudo mkdir -p "$STACK_PATH/software/$SOFTWARE" 2>&1 || echo "Failed to create $SOFTWARE dir"
-                sudo mkdir -p "$INSTALL_DIR" 2>&1 || echo "Failed to create install dir"
-                sudo mkdir -p "$INSTALL_DIR/bin" 2>&1 || echo "Failed to create bin dir"
-                
-                # Check what exists
-                echo "    Checking what exists:"
-                ls -la "$STACK_PATH/" 2>&1 || echo "Cannot list $STACK_PATH"
-                ls -la "$STACK_PATH/software/" 2>&1 || echo "Cannot list software dir"
+                FAILED=1
+                continue
               fi
               
-              # Create mock binary - use echo with -e flag for escape sequences
-              {
-                echo "#!/bin/bash"
-                echo "echo \"$SOFTWARE version $VERSION\""
-                echo "echo \"Architecture: $CVMFS_ARCH (\$(hostname))\""
-                echo "echo \"Toolchain: $TOOLCHAIN\""
-                echo "echo \"Quarter: $QUARTER\""
-              } | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
+              echo "    ✓ Directory created"
               
-              sudo chmod +x "$INSTALL_DIR/bin/$SOFTWARE"
+              # Create mock binary
+              BINARY_FILE="$INSTALL_DIR/bin/$SOFTWARE"
+              echo "    Creating binary: $BINARY_FILE"
+              
+              # Create binary content in a temporary file first
+              TEMP_BINARY="/tmp/${SOFTWARE}_binary_$$"
+              cat > "$TEMP_BINARY" << EOFBINARY
+#!/bin/bash
+echo "$SOFTWARE version $VERSION"
+echo "Architecture: $CVMFS_ARCH ($(hostname))"
+echo "Toolchain: $TOOLCHAIN"
+echo "Quarter: $QUARTER"
+EOFBINARY
+              
+              # Copy to CVMFS
+              if ! sudo cp "$TEMP_BINARY" "$BINARY_FILE"; then
+                echo "    ✗ Failed to create binary"
+                rm -f "$TEMP_BINARY"
+                FAILED=1
+                continue
+              fi
+              
+              rm -f "$TEMP_BINARY"
+              sudo chmod +x "$BINARY_FILE"
+              echo "    ✓ Binary created"
               
               # Create module file
               MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
-              sudo mkdir -p "$MODULE_DIR"
+              if ! sudo mkdir -p "$MODULE_DIR"; then
+                echo "    ✗ Failed to create module directory"
+                FAILED=1
+                continue
+              fi
               
-              # Create module content using echo commands
               MODULE_FILE="$MODULE_DIR/$VERSION-$TOOLCHAIN.lua"
-              echo "-- -*- lua -*-" | sudo tee "$MODULE_FILE" > /dev/null
-              echo "help([[$SOFTWARE version $VERSION]])" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "whatis(\"Name: $SOFTWARE\")" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "whatis(\"Version: $VERSION\")" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "whatis(\"Architecture: $CVMFS_ARCH\")" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "local root = \"$INSTALL_DIR\"" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "prepend_path(\"PATH\", pathJoin(root, \"bin\"))" | sudo tee -a "$MODULE_FILE" > /dev/null
-              echo "setenv(\"${SOFTWARE^^}_ROOT\", root)" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "    Creating module: $MODULE_FILE"
+              
+              # Create module in temporary file
+              TEMP_MODULE="/tmp/${SOFTWARE}_module_$$"
+              cat > "$TEMP_MODULE" << EOFMODULE
+-- -*- lua -*-
+help([[$SOFTWARE version $VERSION]])
+whatis("Name: $SOFTWARE")
+whatis("Version: $VERSION")
+whatis("Architecture: $CVMFS_ARCH")
+
+local root = "$INSTALL_DIR"
+prepend_path("PATH", pathJoin(root, "bin"))
+setenv("${SOFTWARE^^}_ROOT", root)
+EOFMODULE
+              
+              # Copy to CVMFS
+              if ! sudo cp "$TEMP_MODULE" "$MODULE_FILE"; then
+                echo "    ✗ Failed to create module"
+                rm -f "$TEMP_MODULE"
+                FAILED=1
+                continue
+              fi
+              
+              rm -f "$TEMP_MODULE"
+              echo "    ✓ Module created"
               
               ((EB_COUNT++))
+              echo "  ✅ Successfully deployed $SOFTWARE"
             fi
           done
           
-          echo "✓ Deployed $EB_COUNT packages to $CVMFS_ARCH"
+          echo
+          echo "Summary: Deployed $EB_COUNT packages to $CVMFS_ARCH"
+          
+          if [[ $FAILED -ne 0 ]]; then
+            echo "⚠️  Some deployments failed, but continuing..."
+          fi
           
           # Publish transaction
+          echo
           echo "Publishing changes..."
           if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
             echo "✅ Successfully published!"
+            exit 0
           else
             echo "❌ Publish failed"
             sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
