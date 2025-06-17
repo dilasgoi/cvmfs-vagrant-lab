@@ -74,12 +74,10 @@ jobs:
                 sudo mkdir -p "$STACK_BASE/$arch_path/software"
                 sudo mkdir -p "$STACK_BASE/$arch_path/modules/all"
                 
-                # Create architecture info
-                cat << ARCH_EOF | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
-Architecture: $arch_path
-Created: $(date)
-Quarter: $QUARTER
-ARCH_EOF
+                # Create architecture info file
+                echo "Architecture: $arch_path" | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
+                echo "Created: $(date)" | sudo tee -a "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
+                echo "Quarter: $QUARTER" | sudo tee -a "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
               done
               
               # Create current symlink
@@ -115,31 +113,31 @@ ARCH_EOF
               INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
               sudo mkdir -p "$INSTALL_DIR/bin"
               
-              # Create mock binary
-              cat << BINARY_EOF | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
-#!/bin/bash
-echo "$SOFTWARE version $VERSION"
-echo "Architecture: $CVMFS_ARCH ($(hostname))"
-echo "Toolchain: $TOOLCHAIN"
-echo "Quarter: $QUARTER"
-BINARY_EOF
+              # Create mock binary using printf instead of heredoc
+              BINARY_CONTENT="#!/bin/bash\n"
+              BINARY_CONTENT="${BINARY_CONTENT}echo \"$SOFTWARE version $VERSION\"\n"
+              BINARY_CONTENT="${BINARY_CONTENT}echo \"Architecture: $CVMFS_ARCH (\$(hostname))\"\n"
+              BINARY_CONTENT="${BINARY_CONTENT}echo \"Toolchain: $TOOLCHAIN\"\n"
+              BINARY_CONTENT="${BINARY_CONTENT}echo \"Quarter: $QUARTER\"\n"
+              printf "$BINARY_CONTENT" | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
+              
               sudo chmod +x "$INSTALL_DIR/bin/$SOFTWARE"
               
               # Create module file
               MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
               sudo mkdir -p "$MODULE_DIR"
               
-              cat << MODULE_EOF | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
--- -*- lua -*-
-help([[$SOFTWARE version $VERSION]])
-whatis("Name: $SOFTWARE")
-whatis("Version: $VERSION")
-whatis("Architecture: $CVMFS_ARCH")
-
-local root = "$INSTALL_DIR"
-prepend_path("PATH", pathJoin(root, "bin"))
-setenv("${SOFTWARE^^}_ROOT", root)
-MODULE_EOF
+              # Create module content using echo commands
+              MODULE_FILE="$MODULE_DIR/$VERSION-$TOOLCHAIN.lua"
+              echo "-- -*- lua -*-" | sudo tee "$MODULE_FILE" > /dev/null
+              echo "help([[$SOFTWARE version $VERSION]])" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "whatis(\"Name: $SOFTWARE\")" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "whatis(\"Version: $VERSION\")" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "whatis(\"Architecture: $CVMFS_ARCH\")" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "local root = \"$INSTALL_DIR\"" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "prepend_path(\"PATH\", pathJoin(root, \"bin\"))" | sudo tee -a "$MODULE_FILE" > /dev/null
+              echo "setenv(\"${SOFTWARE^^}_ROOT\", root)" | sudo tee -a "$MODULE_FILE" > /dev/null
               
               ((EB_COUNT++))
             fi
