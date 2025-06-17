@@ -1,145 +1,127 @@
-name: Deploy Compatibility Layer
+#!/bin/bash
+# Bootstrap Gentoo Prefix for CVMFS compatibility layer
+# This is a MOCK implementation for demonstration
 
-on:
-  workflow_dispatch:
-    inputs:
-      quarter:
-        description: 'Target quarter (e.g., 2025.Q1)'
-        required: false
-        type: string
-      architectures:
-        description: 'Architectures to build (comma-separated, or "all")'
-        required: false
-        default: 'all'
-        type: string
+set -e
 
-env:
-  CVMFS_REPOSITORY: software.lab.local
+PREFIX_PATH="$1"
+ARCH="$2"
+CFLAGS="$3"
+CPU_FEATURES="$4"
 
-jobs:
-  deploy-compat:
-    runs-on: [self-hosted, linux, cvmfs-publisher, "${{ matrix.arch }}"]
-    strategy:
-      matrix:
-        include:
-          - arch: x86-64-v3
-            cvmfs_arch: intel/haswell
-            cflags: "-march=haswell -O2 -pipe"
-            cpu_features: "AVX2 FMA BMI BMI2"
-          - arch: x86-64-v4
-            cvmfs_arch: intel/skylake_avx512
-            cflags: "-march=skylake-avx512 -O2 -pipe"
-            cpu_features: "AVX512F AVX512CD AVX512BW AVX512DQ AVX512VL"
-      max-parallel: 1  # Sequential to avoid conflicts
+echo "=== Gentoo Prefix Bootstrap ==="
+echo "Prefix Path: $PREFIX_PATH"
+echo "Architecture: $ARCH"
+echo "CFLAGS: $CFLAGS"
+echo "CPU Features: $CPU_FEATURES"
+echo
 
-    steps:
-      - uses: actions/checkout@v4
+# MOCK: In reality, this would download and run the Gentoo Prefix bootstrap
+# Real implementation would:
+# 1. Download bootstrap script from Gentoo
+# 2. Set architecture-specific make.conf
+# 3. Run multi-stage bootstrap (can take 4-8 hours)
+# 4. Install base packages
 
-      - name: Set Quarter
-        id: set-quarter
-        run: |
-          if [[ -n "${{ inputs.quarter }}" ]]; then
-            QUARTER="${{ inputs.quarter }}"
-          else
-            QUARTER=$(date +"%Y.Q$(( ($(date +%-m)-1)/3+1 ))")
-          fi
-          echo "Quarter: $QUARTER"
-          echo "QUARTER=$QUARTER" >> $GITHUB_ENV
+echo "Stage 1: Creating directory structure..."
+sudo mkdir -p "$PREFIX_PATH"/{usr,etc,var,tmp,home,opt}
+sudo mkdir -p "$PREFIX_PATH"/usr/{bin,lib,lib64,include,share,local}
+sudo mkdir -p "$PREFIX_PATH"/etc/{portage,env.d}
+sudo mkdir -p "$PREFIX_PATH"/var/{db,cache,log,tmp}
 
-      - name: Check if should build this architecture
-        id: check-build
-        run: |
-          ARCH_LIST="${{ inputs.architectures }}"
-          CURRENT_ARCH="${{ matrix.cvmfs_arch }}"
+echo "Stage 2: Creating make.conf with architecture optimizations..."
+cat << EOF | sudo tee "$PREFIX_PATH/etc/portage/make.conf" > /dev/null
+# Gentoo Prefix configuration for $ARCH
+CFLAGS="$CFLAGS"
+CXXFLAGS="\${CFLAGS}"
+MAKEOPTS="-j\$(nproc)"
+FEATURES="parallel-fetch"
+CPU_FLAGS_X86="$CPU_FEATURES"
 
-          if [[ "$ARCH_LIST" == "all" ]] || echo "$ARCH_LIST" | grep -q "$CURRENT_ARCH"; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          fi
+# Use CVMFS-friendly paths
+DISTDIR="/tmp/portage-distfiles"
+PKGDIR="/tmp/portage-packages"
 
-      - name: Deploy Gentoo Prefix
-        if: steps.check-build.outputs.should_build == 'true'
-        run: |
-          set +e  # Don't exit on error immediately
+# Architecture-specific USE flags
+USE="minimal -doc -examples"
+EOF
 
-          CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
-          CFLAGS="${{ matrix.cflags }}"
-          CPU_FEATURES="${{ matrix.cpu_features }}"
-          COMPAT_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/compat/linux/x86_64"
+echo "Stage 3: Creating mock binaries and core utilities..."
+# MOCK: Create essential binaries
+for binary in bash ls cp mv rm mkdir chmod chown gcc make python perl; do
+    cat << 'MOCKBIN' | sudo tee "$PREFIX_PATH/usr/bin/$binary" > /dev/null
+#!/bin/bash
+echo "Mock Gentoo Prefix $binary for CVMFS demo"
+echo "Architecture: $ARCH"
+echo "This would be a real $binary in production"
+MOCKBIN
+    sudo chmod +x "$PREFIX_PATH/usr/bin/$binary"
+done
 
-          echo "Deploying Gentoo Prefix"
-          echo "Quarter: $QUARTER"
-          echo "Architecture: $CVMFS_ARCH"
-          echo "Optimization: $CFLAGS"
-          echo "CPU Features: $CPU_FEATURES"
+echo "Stage 4: Creating startprefix script..."
+cat << 'STARTPREFIX' | sudo tee "$PREFIX_PATH/startprefix" > /dev/null
+#!/bin/bash
+# Start Gentoo Prefix environment
 
-          # Start transaction
-          echo "Starting CVMFS transaction..."
-          sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY 2>/dev/null || true
+EPREFIX="$(cd "$(dirname "$0")" && pwd)"
 
-          if ! sudo -u vagrant cvmfs_server transaction $CVMFS_REPOSITORY; then
-            echo "ERROR: Failed to start transaction"
-            exit 1
-          fi
+echo "Entering Gentoo Prefix environment"
+echo "EPREFIX=$EPREFIX"
+echo "Architecture: $(cat $EPREFIX/etc/arch 2>/dev/null || echo unknown)"
 
-          # Create prefix directory structure
-          PREFIX_PATH="$COMPAT_BASE/$CVMFS_ARCH"
-          echo "Creating Gentoo Prefix at: $PREFIX_PATH"
+# Set up environment
+export EPREFIX
+export PATH="$EPREFIX/usr/bin:$EPREFIX/bin:$EPREFIX/usr/sbin:$EPREFIX/sbin:$PATH"
+export LD_LIBRARY_PATH="$EPREFIX/usr/lib:$EPREFIX/usr/lib64:$LD_LIBRARY_PATH"
 
-          sudo mkdir -p "$PREFIX_PATH"
+# Execute command or start shell
+if [[ $# -eq 0 ]]; then
+    exec $EPREFIX/bin/bash --init-file $EPREFIX/etc/profile
+else
+    exec "$@"
+fi
+STARTPREFIX
+sudo chmod +x "$PREFIX_PATH/startprefix"
 
-          # Check if prefix already exists
-          if [[ -f "$PREFIX_PATH/.prefix_complete" ]]; then
-            echo "Gentoo Prefix already exists for $CVMFS_ARCH"
+echo "Stage 5: Creating profile and environment..."
+cat << 'PROFILE' | sudo tee "$PREFIX_PATH/etc/profile" > /dev/null
+# Gentoo Prefix profile
+export PS1="[prefix] \u@\h \w $ "
+export EPREFIX="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+export PATH="$EPREFIX/usr/bin:$EPREFIX/bin:$PATH"
+PROFILE
 
-            # Just update if exists
-            echo "Updating existing prefix..."
-            bash compat-layer/updates/update-prefix.sh "$PREFIX_PATH" "$CVMFS_ARCH" "$CFLAGS"
-          else
-            echo "Bootstrapping new Gentoo Prefix for $CVMFS_ARCH"
+# Save architecture info
+echo "$ARCH" | sudo tee "$PREFIX_PATH/etc/arch" > /dev/null
 
-            # Run bootstrap script
-            bash compat-layer/bootstrap/bootstrap-prefix.sh \
-              "$PREFIX_PATH" \
-              "$CVMFS_ARCH" \
-              "$CFLAGS" \
-              "$CPU_FEATURES"
-          fi
+echo "Stage 6: Installing mock packages..."
+# MOCK: In reality, this would use emerge to install packages
+packages=(
+    "sys-devel/gcc-12.3.0"
+    "dev-lang/python-3.11.5"
+    "sys-devel/make-4.4.1"
+    "dev-util/cmake-3.27.7"
+    "sys-devel/binutils-2.41"
+)
 
-          # Run tests
-          echo "Running validation tests..."
-          if bash compat-layer/tests/test-prefix.sh "$PREFIX_PATH"; then
-            echo "SUCCESS: All tests passed"
-          else
-            echo "WARNING: Some tests failed"
-          fi
+for pkg in "${packages[@]}"; do
+    echo "  [MOCK] Installing $pkg..."
+    sleep 0.5  # Simulate installation time
+done
 
-          # Publish transaction
-          echo "Publishing changes..."
-          if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
-            echo "Successfully published!"
-            exit 0
-          else
-            echo "ERROR: Publish failed"
-            sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
-            exit 1
-          fi
+echo "Stage 7: Creating package database..."
+sudo mkdir -p "$PREFIX_PATH/var/db/pkg"
+# MOCK: Would contain actual package database
 
-  summary:
-    needs: deploy-compat
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deployment Summary
-        run: |
-          echo "## Compatibility Layer Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+echo "Stage 8: Final configuration..."
+# Create marker file
+date | sudo tee "$PREFIX_PATH/.prefix_complete" > /dev/null
+echo "$ARCH" | sudo tee "$PREFIX_PATH/.architecture" > /dev/null
 
-          if [[ "${{ needs.deploy-compat.result }}" == "success" ]]; then
-            echo "### Deployment Successful!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Gentoo Prefix has been deployed with architecture-specific optimizations." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
-          fi
+echo
+echo "=== Bootstrap Complete ==="
+echo "Gentoo Prefix has been created at: $PREFIX_PATH"
+echo "To use: $PREFIX_PATH/startprefix"
+echo
+echo "NOTE: This is a MOCK installation for demonstration."
+echo "A real Gentoo Prefix bootstrap would take 4-8 hours and compile from source."
