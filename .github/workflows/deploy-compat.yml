@@ -40,19 +40,12 @@ env:
 
 jobs:
   deploy-compat:
-    runs-on: [self-hosted, linux, cvmfs-publisher, "${{ matrix.arch }}"]
+    # Runners must have: self-hosted, linux, cvmfs-publisher
+    # They will also have architecture labels like: x86-64-v3, x86-64-v4
+    runs-on: [self-hosted, linux, cvmfs-publisher]
     strategy:
-      matrix:
-        include:
-          - arch: x86-64-v3
-            cvmfs_arch: intel/haswell
-            cflags: "-march=haswell -O2 -pipe"
-            cpu_features: "AVX2 FMA BMI BMI2"
-          - arch: x86-64-v4
-            cvmfs_arch: intel/skylake_avx512
-            cflags: "-march=skylake-avx512 -O2 -pipe"
-            cpu_features: "AVX512F AVX512CD AVX512BW AVX512DQ AVX512VL"
-      max-parallel: 1  # Sequential to avoid conflicts
+      # Run on all available publishers, they'll detect their own architecture
+      max-parallel: 1  # Sequential to avoid CVMFS transaction conflicts
     
     steps:
       - uses: actions/checkout@v4
@@ -66,36 +59,148 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
       
+      - name: Detect Architecture
+        id: detect-arch
+        run: |
+          set +e  # Don't exit on error immediately
+          
+          echo "Detecting architecture for $(hostname)..."
+          
+          # Method 1: Check if architecture was detected during provisioning
+          if [[ -f /etc/cvmfs-publisher/architecture.json ]]; then
+            echo "Using pre-detected architecture from provisioning"
+            ARCH_LABEL=$(jq -r '.arch_label' /etc/cvmfs-publisher/architecture.json)
+            CVMFS_ARCH=$(jq -r '.cvmfs_arch' /etc/cvmfs-publisher/architecture.json)
+            IS_PRIMARY=$(jq -r '.is_primary' /etc/cvmfs-publisher/architecture.json)
+            ARCH_FEATURES=$(jq -r '.arch_features' /etc/cvmfs-publisher/architecture.json)
+            ARCH_CFLAGS=$(jq -r '.cflags' /etc/cvmfs-publisher/architecture.json)
+            ARCH_CPU_FEATURES=$(jq -r '.cpu_features' /etc/cvmfs-publisher/architecture.json)
+          
+          # Method 2: Try archspec if available
+          elif command -v archspec >/dev/null 2>&1; then
+            echo "Using archspec for detection"
+            ARCHSPEC_JSON=$(archspec cpu --json)
+            ARCHSPEC_NAME=$(echo "$ARCHSPEC_JSON" | jq -r '.name')
+            
+            # Map archspec to our scheme
+            case "$ARCHSPEC_NAME" in
+              skylake_avx512|cascadelake|cooperlake|icelake*)
+                ARCH_LABEL="x86-64-v4"
+                CVMFS_ARCH="intel/skylake_avx512"
+                ARCH_FEATURES="AVX512"
+                ARCH_CFLAGS="-march=skylake-avx512 -O2 -pipe"
+                ARCH_CPU_FEATURES="AVX512F AVX512CD AVX512BW AVX512DQ AVX512VL"
+                ;;
+              haswell|broadwell|skylake)
+                ARCH_LABEL="x86-64-v3"
+                CVMFS_ARCH="intel/haswell"
+                ARCH_FEATURES="AVX2"
+                ARCH_CFLAGS="-march=haswell -O2 -pipe"
+                ARCH_CPU_FEATURES="AVX2 FMA BMI BMI2"
+                ;;
+              zen|zen2|zen3)
+                ARCH_LABEL="x86-64-v3"
+                CVMFS_ARCH="amd/zen3"
+                ARCH_FEATURES="AVX2"
+                ARCH_CFLAGS="-march=znver3 -O2 -pipe"
+                ARCH_CPU_FEATURES="AVX2 FMA BMI BMI2"
+                ;;
+              zen4)
+                ARCH_LABEL="x86-64-v4"
+                CVMFS_ARCH="amd/zen4"
+                ARCH_FEATURES="AVX512"
+                ARCH_CFLAGS="-march=znver4 -O2 -pipe"
+                ARCH_CPU_FEATURES="AVX512F AVX512CD AVX512BW AVX512DQ AVX512VL"
+                ;;
+              *)
+                ARCH_LABEL="x86-64-v2"
+                CVMFS_ARCH="generic"
+                ARCH_FEATURES="SSE4.2"
+                ARCH_CFLAGS="-march=x86-64 -mtune=generic -O2 -pipe"
+                ARCH_CPU_FEATURES="SSE4_2"
+                ;;
+            esac
+            
+            # Determine if this should be primary (first v3 node)
+            if [[ "$ARCH_LABEL" == "x86-64-v3" ]] && [[ ! -f /tmp/cvmfs-primary-claimed ]]; then
+              IS_PRIMARY="true"
+              touch /tmp/cvmfs-primary-claimed
+            else
+              IS_PRIMARY="false"
+            fi
+          
+          # Method 3: Fallback to cpuinfo
+          else
+            echo "Falling back to /proc/cpuinfo detection"
+            if grep -q "avx512" /proc/cpuinfo; then
+              ARCH_LABEL="x86-64-v4"
+              CVMFS_ARCH="intel/skylake_avx512"
+              ARCH_FEATURES="AVX512"
+              ARCH_CFLAGS="-march=skylake-avx512 -O2 -pipe"
+              ARCH_CPU_FEATURES="AVX512F AVX512CD AVX512BW AVX512DQ AVX512VL"
+              IS_PRIMARY="false"
+            elif grep -q "avx2" /proc/cpuinfo; then
+              ARCH_LABEL="x86-64-v3"
+              CVMFS_ARCH="intel/haswell"
+              ARCH_FEATURES="AVX2"
+              ARCH_CFLAGS="-march=haswell -O2 -pipe"
+              ARCH_CPU_FEATURES="AVX2 FMA BMI BMI2"
+              IS_PRIMARY="true"  # Assume first v3 is primary
+            else
+              ARCH_LABEL="x86-64-v2"
+              CVMFS_ARCH="generic"
+              ARCH_FEATURES="SSE4.2"
+              ARCH_CFLAGS="-march=x86-64 -mtune=generic -O2 -pipe"
+              ARCH_CPU_FEATURES="SSE4_2"
+              IS_PRIMARY="false"
+            fi
+          fi
+          
+          # Output results
+          echo "Detected architecture:"
+          echo "  Label: $ARCH_LABEL"
+          echo "  CVMFS Path: $CVMFS_ARCH"
+          echo "  Features: $ARCH_FEATURES"
+          echo "  CFLAGS: $ARCH_CFLAGS"
+          echo "  CPU Features: $ARCH_CPU_FEATURES"
+          echo "  Is Primary: $IS_PRIMARY"
+          
+          # Set outputs for subsequent steps
+          echo "arch_label=$ARCH_LABEL" >> $GITHUB_OUTPUT
+          echo "cvmfs_arch=$CVMFS_ARCH" >> $GITHUB_OUTPUT
+          echo "is_primary=$IS_PRIMARY" >> $GITHUB_OUTPUT
+          echo "arch_features=$ARCH_FEATURES" >> $GITHUB_OUTPUT
+          echo "cflags=$ARCH_CFLAGS" >> $GITHUB_OUTPUT
+          echo "cpu_features=$ARCH_CPU_FEATURES" >> $GITHUB_OUTPUT
+      
       - name: Check if should build this architecture
         id: check-build
         run: |
           ARCH_LIST="${{ inputs.architectures }}"
-          CURRENT_ARCH="${{ matrix.cvmfs_arch }}"
+          CURRENT_ARCH="${{ steps.detect-arch.outputs.cvmfs_arch }}"
+          CURRENT_LABEL="${{ steps.detect-arch.outputs.arch_label }}"
           
-          if [[ "$ARCH_LIST" == "all" ]] || echo "$ARCH_LIST" | grep -q "$CURRENT_ARCH"; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
+          # Check if we should build for this architecture
+          if [[ "$ARCH_LIST" == "all" ]]; then
+            echo "Building for all architectures"
+            SHOULD_BUILD="true"
+          elif echo "$ARCH_LIST" | grep -q "$CURRENT_ARCH"; then
+            echo "Architecture $CURRENT_ARCH is in build list"
+            SHOULD_BUILD="true"
+          elif echo "$ARCH_LIST" | grep -q "$CURRENT_LABEL"; then
+            echo "Architecture label $CURRENT_LABEL is in build list"
+            SHOULD_BUILD="true"
           else
-            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "Skipping build for $CURRENT_ARCH ($CURRENT_LABEL)"
+            SHOULD_BUILD="false"
           fi
+          
+          echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
       
-      - name: Deploy Gentoo Prefix
+      - name: Start CVMFS Transaction
         if: steps.check-build.outputs.should_build == 'true'
+        id: start-transaction
         run: |
-          set +e  # Don't exit on error immediately
-          
-          CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
-          CFLAGS="${{ matrix.cflags }}"
-          CPU_FEATURES="${{ matrix.cpu_features }}"
-          VERSION="${{ inputs.version }}"
-          PREFIX_ROOT="$COMPAT_BASE/$VERSION/linux/x86_64"
-          
-          echo "Deploying Gentoo Prefix"
-          echo "Version: $VERSION"
-          echo "Architecture: $CVMFS_ARCH"
-          echo "Optimization: $CFLAGS"
-          echo "CPU Features: $CPU_FEATURES"
-          
-          # Start transaction
           echo "Starting CVMFS transaction..."
           sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY 2>/dev/null || true
           
@@ -103,11 +208,29 @@ jobs:
             echo "ERROR: Failed to start transaction"
             exit 1
           fi
+          echo "transaction_started=true" >> $GITHUB_OUTPUT
+      
+      - name: Deploy Gentoo Prefix
+        if: steps.check-build.outputs.should_build == 'true'
+        run: |
+          set +e  # Don't exit on error immediately
           
-          # Create prefix directory structure
+          CVMFS_ARCH="${{ steps.detect-arch.outputs.cvmfs_arch }}"
+          ARCH_LABEL="${{ steps.detect-arch.outputs.arch_label }}"
+          ARCH_FEATURES="${{ steps.detect-arch.outputs.arch_features }}"
+          CFLAGS="${{ steps.detect-arch.outputs.cflags }}"
+          CPU_FEATURES="${{ steps.detect-arch.outputs.cpu_features }}"
+          VERSION="${{ env.VERSION }}"
+          PREFIX_ROOT="$COMPAT_BASE/$VERSION/linux/x86_64"
           PREFIX_PATH="$PREFIX_ROOT/$CVMFS_ARCH"
-          echo "Creating Gentoo Prefix at: $PREFIX_PATH"
           
+          echo "Deploying Gentoo Prefix"
+          echo "Version: $VERSION"
+          echo "Architecture: $CVMFS_ARCH ($ARCH_LABEL)"
+          echo "Optimization: $CFLAGS"
+          echo "CPU Features: $CPU_FEATURES"
+          
+          echo "Creating Gentoo Prefix at: $PREFIX_PATH"
           sudo mkdir -p "$PREFIX_PATH"
           
           # Check if prefix already exists
@@ -116,30 +239,64 @@ jobs:
             
             # Just update if exists
             echo "Updating existing prefix..."
-            bash compat-stack/update/update-prefix.sh "$PREFIX_PATH" "$CVMFS_ARCH" "$CFLAGS"
+            if bash compat-stack/update/update-prefix.sh "$PREFIX_PATH" "$CVMFS_ARCH" "$CFLAGS"; then
+              echo "update_status=success" >> $GITHUB_ENV
+            else
+              echo "update_status=failed" >> $GITHUB_ENV
+            fi
           else
             echo "Bootstrapping new Gentoo Prefix for $CVMFS_ARCH"
             
             # Run bootstrap script
-            bash compat-stack/bootstrap/bootstrap-prefix.sh \
+            if bash compat-stack/bootstrap/bootstrap-prefix.sh \
               "$PREFIX_PATH" \
               "$CVMFS_ARCH" \
               "$CFLAGS" \
-              "$CPU_FEATURES"
+              "$CPU_FEATURES"; then
+              echo "bootstrap_status=success" >> $GITHUB_ENV
+            else
+              echo "bootstrap_status=failed" >> $GITHUB_ENV
+            fi
           fi
           
+          # Create architecture-specific metadata
+          echo "Creating architecture metadata..."
+          cat > /tmp/arch_metadata_$$ << ARCH_META_EOF
+          {
+            "architecture": "$CVMFS_ARCH",
+            "arch_label": "$ARCH_LABEL",
+            "features": "$ARCH_FEATURES",
+            "cflags": "$CFLAGS",
+            "cpu_features": "$CPU_FEATURES",
+            "created": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "hostname": "$(hostname)"
+          }
+          ARCH_META_EOF
+          sudo mv /tmp/arch_metadata_$$ "$PREFIX_PATH/.arch-metadata.json"
+      
+      - name: Create Version Metadata (Primary Only)
+        if: steps.check-build.outputs.should_build == 'true' && steps.detect-arch.outputs.is_primary == 'true'
+        run: |
+          VERSION="${{ env.VERSION }}"
+          PREFIX_ROOT="$COMPAT_BASE/$VERSION/linux/x86_64"
+          
+          echo "Creating version metadata (primary publisher duty)..."
+          
+          # Wait a bit to ensure all architectures have created their directories
+          sleep 5
+          
           # Create version metadata
-          echo "Creating version metadata..."
-          cat << EOF | sudo tee "$PREFIX_ROOT/.version" > /dev/null
+          cat > /tmp/version_metadata_$$ << VERSION_META_EOF
           version: $VERSION
           created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
           architectures:
-          $(for arch in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
-            if [[ -d "$PREFIX_ROOT/$arch" ]]; then
-              echo "  - $arch"
+          $(for arch_path in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3 amd/zen4; do
+            if [[ -d "$PREFIX_ROOT/$arch_path" ]]; then
+              echo "  - $arch_path"
             fi
           done)
-          EOF
+          VERSION_META_EOF
+          sudo mv /tmp/version_metadata_$$ "$PREFIX_ROOT/.version"
           
           # Update current symlink if requested
           if [[ "${{ inputs.make_current }}" == "true" ]]; then
@@ -147,24 +304,58 @@ jobs:
             sudo rm -f "$COMPAT_BASE/current"
             sudo ln -s "$VERSION" "$COMPAT_BASE/current"
           fi
+      
+      - name: Run Tests
+        if: steps.check-build.outputs.should_build == 'true'
+        run: |
+          CVMFS_ARCH="${{ steps.detect-arch.outputs.cvmfs_arch }}"
+          VERSION="${{ env.VERSION }}"
+          PREFIX_PATH="$COMPAT_BASE/$VERSION/linux/x86_64/$CVMFS_ARCH"
           
-          # Run tests
-          echo "Running validation tests..."
+          echo "Running validation tests for $CVMFS_ARCH..."
           if bash compat-stack/tests/test-prefix.sh "$PREFIX_PATH"; then
+            echo "test_status=success" >> $GITHUB_ENV
             echo "SUCCESS: All tests passed"
           else
+            echo "test_status=warning" >> $GITHUB_ENV
             echo "WARNING: Some tests failed"
           fi
-          
-          # Publish transaction
+      
+      - name: Publish CVMFS Changes
+        if: steps.check-build.outputs.should_build == 'true' && always() && steps.start-transaction.outputs.transaction_started == 'true'
+        run: |
           echo "Publishing changes..."
           if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
-            echo "Successfully published!"
-            exit 0
+            echo "SUCCESS: Successfully published!"
+            echo "publish_status=success" >> $GITHUB_ENV
           else
-            echo "ERROR: Publish failed"
+            echo "ERROR: Publish failed, aborting transaction"
             sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
+            echo "publish_status=failed" >> $GITHUB_ENV
             exit 1
+          fi
+      
+      - name: Job Summary
+        if: always()
+        run: |
+          if [[ "${{ steps.check-build.outputs.should_build }}" == "true" ]]; then
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### Publisher: $(hostname)
+          - **Architecture**: ${{ steps.detect-arch.outputs.arch_label }} (${{ steps.detect-arch.outputs.cvmfs_arch }})
+          - **Features**: ${{ steps.detect-arch.outputs.arch_features }}
+          - **CFLAGS**: ${{ steps.detect-arch.outputs.cflags }}
+          - **Primary Publisher**: ${{ steps.detect-arch.outputs.is_primary }}
+          - **Bootstrap Status**: ${{ env.bootstrap_status || 'N/A' }}
+          - **Update Status**: ${{ env.update_status || 'N/A' }}
+          - **Test Status**: ${{ env.test_status || 'unknown' }}
+          - **Publish Status**: ${{ env.publish_status || 'unknown' }}
+          EOF
+          else
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### Publisher: $(hostname)
+          - **Architecture**: ${{ steps.detect-arch.outputs.arch_label }} (${{ steps.detect-arch.outputs.cvmfs_arch }})
+          - **Status**: Skipped (not in build list: ${{ inputs.architectures }})
+          EOF
           fi
 
   summary:
@@ -177,6 +368,7 @@ jobs:
           echo "## Compatibility Layer Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Architectures:** ${{ inputs.architectures }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ needs.deploy-compat.result }}" == "success" ]]; then
@@ -187,6 +379,10 @@ jobs:
             if [[ "${{ inputs.make_current }}" == "true" ]]; then
               echo "- Set as current version" >> $GITHUB_STEP_SUMMARY
             fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Each publisher deployed the compat layer optimized for its detected architecture." >> $GITHUB_STEP_SUMMARY
           else
             echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check individual job logs for details." >> $GITHUB_STEP_SUMMARY
           fi
