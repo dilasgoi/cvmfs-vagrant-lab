@@ -140,14 +140,14 @@ jobs:
               echo "    Creating binary: $BINARY_FILE"
               
               # Create binary content in a temporary file first
-              TEMP_BINARY="/tmp/${SOFTWARE}_binary_$$"
-              cat > "$TEMP_BINARY" << EOFBINARY
-#!/bin/bash
-echo "$SOFTWARE version $VERSION"
-echo "Architecture: $CVMFS_ARCH ($(hostname))"
-echo "Toolchain: $TOOLCHAIN"
-echo "Quarter: $QUARTER"
-EOFBINARY
+              TEMP_BINARY="/tmp/${SOFTWARE}_binary_$"
+              {
+                echo '#!/bin/bash'
+                echo "echo \"$SOFTWARE version $VERSION\""
+                echo "echo \"Architecture: $CVMFS_ARCH (\$(hostname))\""
+                echo "echo \"Toolchain: $TOOLCHAIN\""
+                echo "echo \"Quarter: $QUARTER\""
+              } > "$TEMP_BINARY"
               
               # Copy to CVMFS
               if ! sudo cp "$TEMP_BINARY" "$BINARY_FILE"; then
@@ -173,18 +173,18 @@ EOFBINARY
               echo "    Creating module: $MODULE_FILE"
               
               # Create module in temporary file
-              TEMP_MODULE="/tmp/${SOFTWARE}_module_$$"
-              cat > "$TEMP_MODULE" << EOFMODULE
--- -*- lua -*-
-help([[$SOFTWARE version $VERSION]])
-whatis("Name: $SOFTWARE")
-whatis("Version: $VERSION")
-whatis("Architecture: $CVMFS_ARCH")
-
-local root = "$INSTALL_DIR"
-prepend_path("PATH", pathJoin(root, "bin"))
-setenv("${SOFTWARE^^}_ROOT", root)
-EOFMODULE
+              TEMP_MODULE="/tmp/${SOFTWARE}_module_$"
+              {
+                echo '-- -*- lua -*-'
+                echo "help([[$SOFTWARE version $VERSION]])"
+                echo "whatis(\"Name: $SOFTWARE\")"
+                echo "whatis(\"Version: $VERSION\")"
+                echo "whatis(\"Architecture: $CVMFS_ARCH\")"
+                echo ""
+                echo "local root = \"$INSTALL_DIR\""
+                echo "prepend_path(\"PATH\", pathJoin(root, \"bin\"))"
+                echo "setenv(\"${SOFTWARE^^}_ROOT\", root)"
+              } > "$TEMP_MODULE"
               
               # Copy to CVMFS
               if ! sudo cp "$TEMP_MODULE" "$MODULE_FILE"; then
