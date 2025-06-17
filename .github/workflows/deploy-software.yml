@@ -75,11 +75,11 @@ jobs:
                 sudo mkdir -p "$STACK_BASE/$arch_path/modules/all"
                 
                 # Create architecture info
-                cat << EOF | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
+                cat << 'ARCH_EOF' | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
 Architecture: $arch_path
 Created: $(date)
 Quarter: $QUARTER
-EOF
+ARCH_EOF
               done
               
               # Create current symlink
@@ -116,20 +116,20 @@ EOF
               sudo mkdir -p "$INSTALL_DIR/bin"
               
               # Create mock binary
-              cat << EOF | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
+              cat << 'BINARY_EOF' | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
 #!/bin/bash
 echo "$SOFTWARE version $VERSION"
 echo "Architecture: $CVMFS_ARCH ($(hostname))"
 echo "Toolchain: $TOOLCHAIN"
 echo "Quarter: $QUARTER"
-EOF
+BINARY_EOF
               sudo chmod +x "$INSTALL_DIR/bin/$SOFTWARE"
               
               # Create module file
               MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
               sudo mkdir -p "$MODULE_DIR"
               
-              cat << EOF | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
+              cat << 'MODULE_EOF' | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
 -- -*- lua -*-
 help([[$SOFTWARE version $VERSION]])
 whatis("Name: $SOFTWARE")
@@ -139,7 +139,7 @@ whatis("Architecture: $CVMFS_ARCH")
 local root = "$INSTALL_DIR"
 prepend_path("PATH", pathJoin(root, "bin"))
 setenv("${SOFTWARE^^}_ROOT", root)
-EOF
+MODULE_EOF
               
               ((EB_COUNT++))
             fi
