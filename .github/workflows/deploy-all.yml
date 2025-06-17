@@ -20,7 +20,7 @@ on:
 
 jobs:
   deploy-compat-layer:
-    if: ${{ inputs.deploy_compat }}
+    if: inputs.deploy_compat
     uses: ./.github/workflows/deploy-compat.yml
     with:
       quarter: ${{ inputs.quarter }}
@@ -28,10 +28,7 @@ jobs:
 
   deploy-software-stack:
     needs: [deploy-compat-layer]
-    if: |
-      always() && 
-      (needs.deploy-compat-layer.result == 'success' || needs.deploy-compat-layer.result == 'skipped') &&
-      inputs.deploy_software
+    if: always() && inputs.deploy_software && (needs.deploy-compat-layer.result == 'success' || needs.deploy-compat-layer.result == 'skipped')
     uses: ./.github/workflows/deploy-software.yml
     with:
       quarter: ${{ inputs.quarter }}
