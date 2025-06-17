@@ -66,8 +66,14 @@ jobs:
           if [[ "$IS_PRIMARY" == "true" ]]; then
             echo "📁 Creating directory structure..."
             
+            # Ensure base versions directory exists
+            sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions"
+            
             # Check if structure already exists
             if [[ ! -f "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" ]]; then
+              # Create quarter directory
+              sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER"
+              
               # Create all architecture directories
               for arch_path in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
                 echo "  Creating $arch_path..."
@@ -113,10 +119,30 @@ jobs:
               echo "    Version: $VERSION"
               echo "    Toolchain: $TOOLCHAIN"
               
-              # Create installation
+              # Create installation directory with error handling
               INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
               echo "    Creating directory: $INSTALL_DIR/bin"
-              sudo mkdir -p "$INSTALL_DIR/bin"
+              
+              # Try to create the directory and capture any error
+              if output=$(sudo mkdir -p "$INSTALL_DIR/bin" 2>&1); then
+                echo "    ✓ Directory created successfully"
+              else
+                echo "    ✗ Failed to create directory"
+                echo "    Error output: $output"
+                echo "    Exit code: $?"
+                
+                # Try alternative approach - create parent directories first
+                echo "    Trying alternative approach..."
+                sudo mkdir -p "$STACK_PATH/software" 2>&1 || echo "Failed to create software dir"
+                sudo mkdir -p "$STACK_PATH/software/$SOFTWARE" 2>&1 || echo "Failed to create $SOFTWARE dir"
+                sudo mkdir -p "$INSTALL_DIR" 2>&1 || echo "Failed to create install dir"
+                sudo mkdir -p "$INSTALL_DIR/bin" 2>&1 || echo "Failed to create bin dir"
+                
+                # Check what exists
+                echo "    Checking what exists:"
+                ls -la "$STACK_PATH/" 2>&1 || echo "Cannot list $STACK_PATH"
+                ls -la "$STACK_PATH/software/" 2>&1 || echo "Cannot list software dir"
+              fi
               
               # Create mock binary - use echo with -e flag for escape sequences
               {
