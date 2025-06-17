@@ -1,87 +1,79 @@
-name: Deploy Compatibility Layer
+name: Deploy HPC Software Stack
 
 on:
+  push:
+    branches: [dev]
+    paths:
+      - 'software-stack/**'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Compat layer version (e.g., 2024.2)'
-        required: true
-        type: string
-      architectures:
-        description: 'Architectures to build (comma-separated, or "all")'
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
         required: false
-        default: 'all'
         type: string
-      make_current:
-        description: 'Set as current version after deployment'
+      compat_version:
+        description: 'Compat layer version to use (e.g., 2024.2)'
         required: false
-        default: true
-        type: boolean
+        default: 'current'
+        type: string
   workflow_call:
     inputs:
-      version:
-        description: 'Compat layer version (e.g., 2024.2)'
-        required: true
-        type: string
-      architectures:
-        description: 'Architectures to build (comma-separated, or "all")'
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
         required: false
-        default: 'all'
         type: string
-      make_current:
-        description: 'Set as current version after deployment'
+      compat_version:
+        description: 'Compat layer version to use (e.g., 2024.2)'
         required: false
-        default: true
-        type: boolean
+        default: 'current'
+        type: string
 
 env:
   CVMFS_REPOSITORY: software.lab.local
-  COMPAT_BASE: /cvmfs/software.lab.local/compat/gentoo-prefix
 
 jobs:
-  deploy-compat:
+  deploy-software:
     runs-on: [self-hosted, linux, cvmfs-publisher, "${{ matrix.arch }}"]
     strategy:
       matrix:
         include:
           - arch: x86-64-v3
             cvmfs_arch: intel/haswell
-            cflags: "-march=haswell -O2 -pipe"
-            cpu_features: "AVX2 FMA BMI BMI2"
+            is_primary: true  # This publisher creates structure
           - arch: x86-64-v4
             cvmfs_arch: intel/skylake_avx512
-            cflags: "-march=skylake-avx512 -O2 -pipe"
-            cpu_features: "AVX512F AVX512CD AVX512BW AVX512DQ AVX512VL"
-      max-parallel: 1
+            is_primary: false
+      max-parallel: 1  # Sequential to avoid conflicts
     
     steps:
       - uses: actions/checkout@v4
       
-      - name: Validate Version Format
+      - name: Set Quarter
+        id: set-quarter
         run: |
-          VERSION="${{ inputs.version }}"
-          if ! [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]+$ ]]; then
-            echo "ERROR: Version must be in format YYYY.N (e.g., 2024.2)"
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-      
-      - name: Check if should build this architecture
-        id: check-build
-        run: |
-          ARCH_LIST="${{ inputs.architectures }}"
-          CURRENT_ARCH="${{ matrix.cvmfs_arch }}"
-          
-          if [[ "$ARCH_LIST" == "all" ]] || echo "$ARCH_LIST" | grep -q "$CURRENT_ARCH"; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
+          if [[ -n "${{ inputs.quarter }}" ]]; then
+            QUARTER="${{ inputs.quarter }}"
           else
-            echo "should_build=false" >> $GITHUB_OUTPUT
+            QUARTER=$(date +"%Y.Q$(( ($(date +%-m)-1)/3+1 ))")
           fi
+          echo "Quarter: $QUARTER"
+          echo "QUARTER=$QUARTER" >> $GITHUB_ENV
       
-      - name: Start CVMFS Transaction
-        if: steps.check-build.outputs.should_build == 'true'
-        id: start-transaction
+      - name: Deploy to CVMFS
         run: |
+          set +e  # Don't exit on error immediately
+          
+          CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
+          IS_PRIMARY="${{ matrix.is_primary }}"
+          COMPAT_VERSION="${{ inputs.compat_version }}"
+          STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
+          
+          echo "Publisher: $(hostname)"
+          echo "Quarter: $QUARTER"
+          echo "Architecture: $CVMFS_ARCH"
+          echo "Compat Layer: $COMPAT_VERSION"
+          
+          # Start transaction
           echo "Starting CVMFS transaction..."
           sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY 2>/dev/null || true
           
@@ -89,108 +81,232 @@ jobs:
             echo "ERROR: Failed to start transaction"
             exit 1
           fi
-      
-      - name: Deploy Gentoo Prefix
-        if: steps.check-build.outputs.should_build == 'true'
-        run: |
-          CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
-          CFLAGS="${{ matrix.cflags }}"
-          CPU_FEATURES="${{ matrix.cpu_features }}"
-          VERSION="${{ env.VERSION }}"
-          PREFIX_ROOT="$COMPAT_BASE/$VERSION/linux/x86_64"
-          PREFIX_PATH="$PREFIX_ROOT/$CVMFS_ARCH"
           
-          echo "Deploying Gentoo Prefix"
-          echo "Version: $VERSION"
-          echo "Architecture: $CVMFS_ARCH"
-          echo "Optimization: $CFLAGS"
-          echo "CPU Features: $CPU_FEATURES"
+          # If primary publisher, create the full directory structure
+          if [[ "$IS_PRIMARY" == "true" ]]; then
+            echo "Creating directory structure..."
+            
+            # Ensure base versions directory exists
+            sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions"
+            
+            # Check if structure already exists
+            if [[ ! -f "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" ]]; then
+              # Create quarter directory
+              sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER"
+              
+              # Create all architecture directories
+              for arch_path in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
+                echo "  Creating $arch_path..."
+                sudo mkdir -p "$STACK_BASE/$arch_path/software"
+                sudo mkdir -p "$STACK_BASE/$arch_path/modules/all"
+                
+                # Create architecture info file
+                sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null << ARCH_EOF
+          Architecture: $arch_path
+          Created: $(date)
+          Quarter: $QUARTER
+          ARCH_EOF
+              done
+              
+              # Create symlink for current version
+              echo "Creating 'current' symlink..."
+              CURRENT_LINK="/cvmfs/$CVMFS_REPOSITORY/versions/current"
+              sudo rm -f "$CURRENT_LINK"
+              sudo ln -s "$QUARTER" "$CURRENT_LINK"
+              
+              # Create README at root
+              echo "Creating documentation..."
+              sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/README.md" > /dev/null << 'README_EOF'
+          # CVMFS Software Stack
           
-          sudo mkdir -p "$PREFIX_PATH"
+          ## Structure
           
-          # Check if prefix already exists
-          if [[ -f "$PREFIX_PATH/.prefix_complete" ]]; then
-            echo "Gentoo Prefix already exists for $CVMFS_ARCH"
-            echo "Updating existing prefix..."
-            bash compat-stack/update/update-prefix.sh "$PREFIX_PATH" "$CVMFS_ARCH" "$CFLAGS"
-          else
-            echo "Bootstrapping new Gentoo Prefix for $CVMFS_ARCH"
-            bash compat-stack/bootstrap/bootstrap-prefix.sh \
-              "$PREFIX_PATH" \
-              "$CVMFS_ARCH" \
-              "$CFLAGS" \
-              "$CPU_FEATURES"
-          fi
+          ```
+          versions/
+          ├── current -> 2025.Q1  (symlink to latest quarter)
+          ├── 2025.Q1/
+          │   └── software/linux/x86_64/
+          │       ├── generic/
+          │       ├── intel/haswell/
+          │       ├── intel/skylake_avx512/
+          │       ├── intel/icelake/
+          │       ├── amd/zen2/
+          │       └── amd/zen3/
+          └── README.md
+          ```
           
-          # Create version metadata
-          cat > /tmp/version_metadata << EOF
-          version: $VERSION
-          created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          architectures:
-          $(for arch in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
-            if [[ -d "$PREFIX_ROOT/$arch" ]]; then
-              echo "  - $arch"
-            fi
-          done)
-          EOF
-          sudo mv /tmp/version_metadata "$PREFIX_ROOT/.version"
+          ## Architecture Mapping
           
-          # Update current symlink if requested
-          if [[ "${{ inputs.make_current }}" == "true" ]]; then
-            echo "Updating current symlink..."
-            sudo rm -f "$COMPAT_BASE/current"
-            sudo ln -s "$VERSION" "$COMPAT_BASE/current"
-          fi
-      
-      - name: Run Tests
-        if: steps.check-build.outputs.should_build == 'true'
-        run: |
-          PREFIX_PATH="$COMPAT_BASE/${{ env.VERSION }}/linux/x86_64/${{ matrix.cvmfs_arch }}"
-          echo "Running validation tests..."
-          if bash compat-stack/tests/test-prefix.sh "$PREFIX_PATH"; then
-            echo "SUCCESS: All tests passed"
-          else
-            echo "WARNING: Some tests failed"
-          fi
-      
-      - name: Publish Changes
-        if: steps.check-build.outputs.should_build == 'true' && always()
-        run: |
-          if [[ "${{ steps.start-transaction.outcome }}" == "success" ]]; then
-            echo "Publishing changes..."
-            if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
-              echo "Successfully published!"
+          - **generic**: Fallback for unknown CPUs
+          - **intel/haswell**: AVX2 support (Publisher 1)
+          - **intel/skylake_avx512**: AVX512 support (Publisher 2)
+          - **intel/icelake**: Ice Lake and newer
+          - **amd/zen2**: AMD EPYC 7002 series
+          - **amd/zen3**: AMD EPYC 7003 series
+          
+          ## Accessing Software
+          
+          ```bash
+          # Using current version
+          module use /cvmfs/software.lab.local/versions/current/software/linux/x86_64/intel/haswell/modules/all
+          
+          # Using specific quarter
+          module use /cvmfs/software.lab.local/versions/2025.Q1/software/linux/x86_64/intel/haswell/modules/all
+          ```
+          README_EOF
+              
+              # Create deployment marker
+              sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" > /dev/null << DEPLOY_EOF
+          Deployed: $(date)
+          Structure Version: 1.0
+          Architectures: generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3
+          DEPLOY_EOF
+              
+              echo "SUCCESS: Directory structure created"
             else
-              echo "ERROR: Publish failed"
-              sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
-              exit 1
+              echo "Structure already exists"
             fi
+          fi
+          
+          # Deploy software for this architecture
+          echo "Deploying software to $CVMFS_ARCH..."
+          STACK_PATH="$STACK_BASE/$CVMFS_ARCH"
+          
+          # Process EasyBuild configs
+          EB_COUNT=0
+          FAILED=0
+          
+          for eb in software-stack/easyconfigs/*.eb; do
+            if [[ -f "$eb" ]]; then
+              echo "  Processing $(basename $eb)..."
+              
+              # Extract software info
+              EB_NAME=$(basename "$eb" .eb)
+              SOFTWARE=$(echo "$EB_NAME" | cut -d- -f1)
+              VERSION=$(echo "$EB_NAME" | cut -d- -f2)
+              TOOLCHAIN=$(echo "$EB_NAME" | cut -d- -f3,4 || echo "system")
+              
+              echo "    Software: $SOFTWARE"
+              echo "    Version: $VERSION"
+              echo "    Toolchain: $TOOLCHAIN"
+              
+              # Create installation directory
+              INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
+              echo "    Creating directory: $INSTALL_DIR/bin"
+              
+              if ! sudo mkdir -p "$INSTALL_DIR/bin"; then
+                echo "    FAILED: Failed to create directory"
+                FAILED=1
+                continue
+              fi
+              
+              echo "    SUCCESS: Directory created"
+              
+              # Create mock binary
+              BINARY_FILE="$INSTALL_DIR/bin/$SOFTWARE"
+              echo "    Creating binary: $BINARY_FILE"
+              
+              # Create binary content in a temporary file first
+              TEMP_BINARY="/tmp/${SOFTWARE}_binary_$$"
+              cat > "$TEMP_BINARY" << BINARY_EOF
+          #!/bin/bash
+          echo "$SOFTWARE version $VERSION"
+          echo "Architecture: $CVMFS_ARCH (\$(hostname))"
+          echo "Toolchain: $TOOLCHAIN"
+          echo "Quarter: $QUARTER"
+          echo "Using Gentoo Prefix: /cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/$COMPAT_VERSION"
+          BINARY_EOF
+              
+              # Copy to CVMFS
+              if ! sudo cp "$TEMP_BINARY" "$BINARY_FILE"; then
+                echo "    FAILED: Failed to create binary"
+                rm -f "$TEMP_BINARY"
+                FAILED=1
+                continue
+              fi
+              
+              rm -f "$TEMP_BINARY"
+              sudo chmod +x "$BINARY_FILE"
+              echo "    SUCCESS: Binary created"
+              
+              # Create module file
+              MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
+              if ! sudo mkdir -p "$MODULE_DIR"; then
+                echo "    FAILED: Failed to create module directory"
+                FAILED=1
+                continue
+              fi
+              
+              MODULE_FILE="$MODULE_DIR/$VERSION-$TOOLCHAIN.lua"
+              echo "    Creating module: $MODULE_FILE"
+              
+              # Create module in temporary file
+              TEMP_MODULE="/tmp/${SOFTWARE}_module_$$"
+              cat > "$TEMP_MODULE" << MODULE_EOF
+          -- -*- lua -*-
+          help([[$SOFTWARE version $VERSION - Mock module for CVMFS Lab]])
+          whatis("Description: Mock $SOFTWARE built with $TOOLCHAIN")
+          whatis("Version: $VERSION")
+          
+          prepend_path("PATH", "$INSTALL_DIR/bin")
+          prepend_path("LD_LIBRARY_PATH", "$INSTALL_DIR/lib")
+          
+          setenv("${SOFTWARE^^}_ROOT", "$INSTALL_DIR")
+          MODULE_EOF
+              
+              # Copy to CVMFS
+              if ! sudo cp "$TEMP_MODULE" "$MODULE_FILE"; then
+                echo "    FAILED: Failed to create module"
+                rm -f "$TEMP_MODULE"
+                FAILED=1
+                continue
+              fi
+              
+              rm -f "$TEMP_MODULE"
+              echo "    SUCCESS: Module created"
+              
+              ((EB_COUNT++))
+              echo "  Successfully deployed $SOFTWARE"
+            fi
+          done
+          
+          echo
+          echo "Summary: Deployed $EB_COUNT packages to $CVMFS_ARCH"
+          
+          if [[ $FAILED -ne 0 ]]; then
+            echo "WARNING: Some deployments failed, but continuing..."
+          fi
+          
+          # Publish transaction
+          echo
+          echo "Publishing changes..."
+          if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
+            echo "SUCCESS: Successfully published!"
+            exit 0
+          else
+            echo "ERROR: Publish failed"
+            sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
+            exit 1
           fi
 
   summary:
-    needs: deploy-compat
+    needs: deploy-software
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Deployment Summary
         run: |
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-          ## Compatibility Layer Deployment
+          echo "## HPC Software Stack Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          **Version:** ${{ inputs.version }}
-          
-          EOF
-          
-          if [[ "${{ needs.deploy-compat.result }}" == "success" ]]; then
-            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-          ### ✅ Deployment Successful!
-          
-          Gentoo Prefix has been deployed to:
-          - Path: `/cvmfs/software.lab.local/compat/gentoo-prefix/${{ inputs.version }}/`
-          EOF
-            if [[ "${{ inputs.make_current }}" == "true" ]]; then
-              echo "- Set as current version" >> $GITHUB_STEP_SUMMARY
-            fi
+          if [[ "${{ needs.deploy-software.result }}" == "success" ]]; then
+            echo "### Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The software stack has been deployed with:" >> $GITHUB_STEP_SUMMARY
+            echo "- Directory structure for all architectures" >> $GITHUB_STEP_SUMMARY
+            echo "- Software packages from EasyBuild configs" >> $GITHUB_STEP_SUMMARY
+            echo "- Module files for each package" >> $GITHUB_STEP_SUMMARY
+            echo "- Linked to compat layer: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
           fi

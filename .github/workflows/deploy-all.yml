@@ -50,21 +50,19 @@ jobs:
     steps:
       - name: Deployment Summary
         run: |
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-          ## Complete Stack Deployment Summary
-          
-          EOF
+          echo "## Complete Stack Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
           # Compat layer status
           if [[ "${{ inputs.deploy_compat }}" == "true" ]]; then
             if [[ "${{ needs.deploy-compat-layer.result }}" == "success" ]]; then
-              echo "### ✅ Compatibility Layer: SUCCESS" >> $GITHUB_STEP_SUMMARY
+              echo "### Compatibility Layer: SUCCESS" >> $GITHUB_STEP_SUMMARY
               echo "Version: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
             else
-              echo "### ❌ Compatibility Layer: FAILED" >> $GITHUB_STEP_SUMMARY
+              echo "### Compatibility Layer: FAILED" >> $GITHUB_STEP_SUMMARY
             fi
           else
-            echo "### ⏭️ Compatibility Layer: SKIPPED" >> $GITHUB_STEP_SUMMARY
+            echo "### Compatibility Layer: SKIPPED" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -72,12 +70,12 @@ jobs:
           # Software stack status
           if [[ "${{ inputs.deploy_software }}" == "true" ]]; then
             if [[ "${{ needs.deploy-software-stack.result }}" == "success" ]]; then
-              echo "### ✅ Software Stack: SUCCESS" >> $GITHUB_STEP_SUMMARY
-              echo "- Quarter: ${{ inputs.quarter || 'Auto-detected' }}" >> $GITHUB_STEP_SUMMARY
-              echo "- Using compat: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
+              echo "### Software Stack: SUCCESS" >> $GITHUB_STEP_SUMMARY
+              echo "Quarter: ${{ inputs.quarter || 'Auto-detected' }}" >> $GITHUB_STEP_SUMMARY
+              echo "Using compat: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
             else
-              echo "### ❌ Software Stack: FAILED" >> $GITHUB_STEP_SUMMARY
+              echo "### Software Stack: FAILED" >> $GITHUB_STEP_SUMMARY
             fi
           else
-            echo "### ⏭️ Software Stack: SKIPPED" >> $GITHUB_STEP_SUMMARY
+            echo "### Software Stack: SKIPPED" >> $GITHUB_STEP_SUMMARY
           fi
