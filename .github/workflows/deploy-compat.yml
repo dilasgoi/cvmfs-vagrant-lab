@@ -106,12 +106,12 @@ jobs:
             
             # Just update if exists
             echo "Updating existing prefix..."
-            bash compat-layer/updates/update-prefix.sh "$PREFIX_PATH" "$CVMFS_ARCH" "$CFLAGS"
+            bash compat-stack/updates/update-prefix.sh "$PREFIX_PATH" "$CVMFS_ARCH" "$CFLAGS"
           else
             echo "Bootstrapping new Gentoo Prefix for $CVMFS_ARCH"
             
             # Run bootstrap script
-            bash compat-layer/bootstrap/bootstrap-prefix.sh \
+            bash compat-stack/bootstrap/bootstrap-prefix.sh \
               "$PREFIX_PATH" \
               "$CVMFS_ARCH" \
               "$CFLAGS" \
@@ -120,7 +120,7 @@ jobs:
           
           # Run tests
           echo "Running validation tests..."
-          if bash compat-layer/tests/test-prefix.sh "$PREFIX_PATH"; then
+          if bash compat-stack/tests/test-prefix.sh "$PREFIX_PATH"; then
             echo "SUCCESS: All tests passed"
           else
             echo "WARNING: Some tests failed"
