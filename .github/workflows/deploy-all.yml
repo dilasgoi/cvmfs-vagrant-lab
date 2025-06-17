@@ -27,9 +27,7 @@ jobs:
       architectures: all
 
   deploy-software-stack:
-    if: ${{ inputs.deploy_software }}
     needs: [deploy-compat-layer]
-    # Run even if compat layer was skipped
     if: |
       always() && 
       (needs.deploy-compat-layer.result == 'success' || needs.deploy-compat-layer.result == 'skipped') &&
