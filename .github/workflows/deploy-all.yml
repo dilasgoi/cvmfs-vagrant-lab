@@ -4,8 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       quarter:
-        description: 'Target quarter (e.g., 2025.Q1)'
+        description: 'Software stack quarter (e.g., 2025.Q1)'
         required: false
+        type: string
+      compat_version:
+        description: 'Compat layer version (e.g., 2024.2)'
+        required: false
+        default: 'current'
         type: string
       deploy_compat:
         description: 'Deploy compatibility layer'
@@ -23,8 +28,9 @@ jobs:
     if: inputs.deploy_compat
     uses: ./.github/workflows/deploy-compat.yml
     with:
-      quarter: ${{ inputs.quarter }}
+      version: ${{ inputs.compat_version }}
       architectures: all
+      make_current: true
 
   deploy-software-stack:
     needs: [deploy-compat-layer]
@@ -32,6 +38,7 @@ jobs:
     uses: ./.github/workflows/deploy-software.yml
     with:
       quarter: ${{ inputs.quarter }}
+      compat_version: ${{ inputs.compat_version }}
 
   summary:
     needs: [deploy-compat-layer, deploy-software-stack]
@@ -47,6 +54,7 @@ jobs:
           if [[ "${{ inputs.deploy_compat }}" == "true" ]]; then
             if [[ "${{ needs.deploy-compat-layer.result }}" == "success" ]]; then
               echo "### Compatibility Layer: SUCCESS" >> $GITHUB_STEP_SUMMARY
+              echo "Version: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
             else
               echo "### Compatibility Layer: FAILED" >> $GITHUB_STEP_SUMMARY
             fi
@@ -60,6 +68,8 @@ jobs:
           if [[ "${{ inputs.deploy_software }}" == "true" ]]; then
             if [[ "${{ needs.deploy-software-stack.result }}" == "success" ]]; then
               echo "### Software Stack: SUCCESS" >> $GITHUB_STEP_SUMMARY
+              echo "Quarter: ${{ inputs.quarter || 'Auto-detected' }}" >> $GITHUB_STEP_SUMMARY
+              echo "Using compat: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
             else
               echo "### Software Stack: FAILED" >> $GITHUB_STEP_SUMMARY
             fi

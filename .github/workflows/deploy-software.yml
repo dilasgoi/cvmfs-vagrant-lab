@@ -11,11 +11,21 @@ on:
         description: 'Target quarter (e.g., 2025.Q1)'
         required: false
         type: string
+      compat_version:
+        description: 'Compat layer version to use (e.g., 2024.2)'
+        required: false
+        default: 'current'
+        type: string
   workflow_call:
     inputs:
       quarter:
         description: 'Target quarter (e.g., 2025.Q1)'
         required: false
+        type: string
+      compat_version:
+        description: 'Compat layer version to use (e.g., 2024.2)'
+        required: false
+        default: 'current'
         type: string
 
 env:
@@ -55,11 +65,13 @@ jobs:
           
           CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
           IS_PRIMARY="${{ matrix.is_primary }}"
-          STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
+          COMPAT_VERSION="${{ inputs.compat_version }}"
+          STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/software/versions/$QUARTER/linux/x86_64"
           
           echo "Publisher: $(hostname)"
           echo "Quarter: $QUARTER"
           echo "Architecture: $CVMFS_ARCH"
+          echo "Compat Layer: $COMPAT_VERSION"
           
           # Start transaction
           echo "Starting CVMFS transaction..."
@@ -75,12 +87,12 @@ jobs:
             echo "Creating directory structure..."
             
             # Ensure base versions directory exists
-            sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions"
+            sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/software/versions"
             
             # Check if structure already exists
-            if [[ ! -f "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" ]]; then
+            if [[ ! -f "/cvmfs/$CVMFS_REPOSITORY/software/versions/$QUARTER/.deployed" ]]; then
               # Create quarter directory
-              sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER"
+              sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/software/versions/$QUARTER"
               
               # Create all architecture directories
               for arch_path in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
@@ -92,14 +104,22 @@ jobs:
                 echo "Architecture: $arch_path" | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
                 echo "Created: $(date)" | sudo tee -a "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
                 echo "Quarter: $QUARTER" | sudo tee -a "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
+                echo "Compat: $COMPAT_VERSION" | sudo tee -a "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
               done
               
               # Create current symlink
-              sudo rm -f "/cvmfs/$CVMFS_REPOSITORY/versions/current"
-              sudo ln -s "$QUARTER" "/cvmfs/$CVMFS_REPOSITORY/versions/current"
+              sudo rm -f "/cvmfs/$CVMFS_REPOSITORY/software/versions/current"
+              sudo ln -s "$QUARTER" "/cvmfs/$CVMFS_REPOSITORY/software/versions/current"
+              
+              # Create compat version mapping
+              cat << EOF | sudo tee "/cvmfs/$CVMFS_REPOSITORY/software/versions/$QUARTER/.compat-version" > /dev/null
+# Compatibility layer version for this software release
+COMPAT_VERSION="$COMPAT_VERSION"
+COMPAT_PATH="/cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/$COMPAT_VERSION"
+EOF
               
               # Create deployment marker
-              echo "$(date)" | sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" > /dev/null
+              echo "$(date)" | sudo tee "/cvmfs/$CVMFS_REPOSITORY/software/versions/$QUARTER/.deployed" > /dev/null
               
               echo "SUCCESS: Directory structure created"
             else
@@ -153,6 +173,7 @@ jobs:
                 echo "echo \"Architecture: $CVMFS_ARCH (\$(hostname))\""
                 echo "echo \"Toolchain: $TOOLCHAIN\""
                 echo "echo \"Quarter: $QUARTER\""
+                echo "echo \"Using Gentoo Prefix: /cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/$COMPAT_VERSION\""
               } > "$TEMP_BINARY"
               
               # Copy to CVMFS
@@ -187,9 +208,17 @@ jobs:
                 echo "whatis(\"Version: $VERSION\")"
                 echo "whatis(\"Architecture: $CVMFS_ARCH\")"
                 echo ""
+                echo "-- Set up Gentoo Prefix environment"
+                echo "local compat_version = \"$COMPAT_VERSION\""
+                echo "local eprefix = \"/cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/\" .. compat_version .. \"/linux/x86_64/$CVMFS_ARCH\""
+                echo "prepend_path(\"PATH\", pathJoin(eprefix, \"usr/bin\"))"
+                echo "prepend_path(\"LD_LIBRARY_PATH\", pathJoin(eprefix, \"usr/lib64\"))"
+                echo ""
+                echo "-- Software paths"
                 echo "local root = \"$INSTALL_DIR\""
                 echo "prepend_path(\"PATH\", pathJoin(root, \"bin\"))"
                 echo "setenv(\"${SOFTWARE^^}_ROOT\", root)"
+                echo "setenv(\"EPREFIX\", eprefix)"
               } > "$TEMP_MODULE"
               
               # Copy to CVMFS
@@ -244,6 +273,7 @@ jobs:
             echo "- Directory structure for all architectures" >> $GITHUB_STEP_SUMMARY
             echo "- Software packages from EasyBuild configs" >> $GITHUB_STEP_SUMMARY
             echo "- Module files for each package" >> $GITHUB_STEP_SUMMARY
+            echo "- Linked to compat layer: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
           else
             echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
           fi

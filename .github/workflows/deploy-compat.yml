@@ -3,29 +3,40 @@ name: Deploy Compatibility Layer
 on:
   workflow_dispatch:
     inputs:
-      quarter:
-        description: 'Target quarter (e.g., 2025.Q1)'
-        required: false
+      version:
+        description: 'Compat layer version (e.g., 2024.2)'
+        required: true
         type: string
       architectures:
         description: 'Architectures to build (comma-separated, or "all")'
         required: false
         default: 'all'
         type: string
+      make_current:
+        description: 'Set as current version after deployment'
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
-      quarter:
-        description: 'Target quarter (e.g., 2025.Q1)'
-        required: false
+      version:
+        description: 'Compat layer version (e.g., 2024.2)'
+        required: true
         type: string
       architectures:
         description: 'Architectures to build (comma-separated, or "all")'
         required: false
         default: 'all'
         type: string
+      make_current:
+        description: 'Set as current version after deployment'
+        required: false
+        default: true
+        type: boolean
 
 env:
   CVMFS_REPOSITORY: software.lab.local
+  COMPAT_BASE: /cvmfs/software.lab.local/compat/gentoo-prefix
 
 jobs:
   deploy-compat:
@@ -46,16 +57,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set Quarter
-        id: set-quarter
+      - name: Validate Version Format
         run: |
-          if [[ -n "${{ inputs.quarter }}" ]]; then
-            QUARTER="${{ inputs.quarter }}"
-          else
-            QUARTER=$(date +"%Y.Q$(( ($(date +%-m)-1)/3+1 ))")
+          VERSION="${{ inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]+$ ]]; then
+            echo "ERROR: Version must be in format YYYY.N (e.g., 2024.2)"
+            exit 1
           fi
-          echo "Quarter: $QUARTER"
-          echo "QUARTER=$QUARTER" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
       
       - name: Check if should build this architecture
         id: check-build
@@ -77,10 +86,11 @@ jobs:
           CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
           CFLAGS="${{ matrix.cflags }}"
           CPU_FEATURES="${{ matrix.cpu_features }}"
-          COMPAT_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/compat/linux/x86_64"
+          VERSION="${{ inputs.version }}"
+          PREFIX_ROOT="$COMPAT_BASE/$VERSION/linux/x86_64"
           
           echo "Deploying Gentoo Prefix"
-          echo "Quarter: $QUARTER"
+          echo "Version: $VERSION"
           echo "Architecture: $CVMFS_ARCH"
           echo "Optimization: $CFLAGS"
           echo "CPU Features: $CPU_FEATURES"
@@ -95,7 +105,7 @@ jobs:
           fi
           
           # Create prefix directory structure
-          PREFIX_PATH="$COMPAT_BASE/$CVMFS_ARCH"
+          PREFIX_PATH="$PREFIX_ROOT/$CVMFS_ARCH"
           echo "Creating Gentoo Prefix at: $PREFIX_PATH"
           
           sudo mkdir -p "$PREFIX_PATH"
@@ -116,6 +126,26 @@ jobs:
               "$CVMFS_ARCH" \
               "$CFLAGS" \
               "$CPU_FEATURES"
+          fi
+          
+          # Create version metadata
+          echo "Creating version metadata..."
+          cat << EOF | sudo tee "$PREFIX_ROOT/.version" > /dev/null
+version: $VERSION
+created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+architectures:
+$(for arch in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
+  if [[ -d "$PREFIX_ROOT/$arch" ]]; then
+    echo "  - $arch"
+  fi
+done)
+EOF
+          
+          # Update current symlink if requested
+          if [[ "${{ inputs.make_current }}" == "true" ]]; then
+            echo "Updating current symlink..."
+            sudo rm -f "$COMPAT_BASE/current"
+            sudo ln -s "$VERSION" "$COMPAT_BASE/current"
           fi
           
           # Run tests
@@ -146,11 +176,17 @@ jobs:
         run: |
           echo "## Compatibility Layer Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ needs.deploy-compat.result }}" == "success" ]]; then
             echo "### Deployment Successful!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Gentoo Prefix has been deployed with architecture-specific optimizations." >> $GITHUB_STEP_SUMMARY
+            echo "Gentoo Prefix has been deployed to:" >> $GITHUB_STEP_SUMMARY
+            echo "- Path: \`/cvmfs/software.lab.local/compat/gentoo-prefix/${{ inputs.version }}/\`" >> $GITHUB_STEP_SUMMARY
+            if [[ "${{ inputs.make_current }}" == "true" ]]; then
+              echo "- Set as current version" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
           fi
