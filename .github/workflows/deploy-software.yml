@@ -75,7 +75,7 @@ jobs:
                 sudo mkdir -p "$STACK_BASE/$arch_path/modules/all"
                 
                 # Create architecture info
-                cat << 'ARCH_EOF' | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
+                cat << ARCH_EOF | sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null
 Architecture: $arch_path
 Created: $(date)
 Quarter: $QUARTER
@@ -116,7 +116,7 @@ ARCH_EOF
               sudo mkdir -p "$INSTALL_DIR/bin"
               
               # Create mock binary
-              cat << 'BINARY_EOF' | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
+              cat << BINARY_EOF | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
 #!/bin/bash
 echo "$SOFTWARE version $VERSION"
 echo "Architecture: $CVMFS_ARCH ($(hostname))"
@@ -129,7 +129,7 @@ BINARY_EOF
               MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
               sudo mkdir -p "$MODULE_DIR"
               
-              cat << 'MODULE_EOF' | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
+              cat << MODULE_EOF | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
 -- -*- lua -*-
 help([[$SOFTWARE version $VERSION]])
 whatis("Name: $SOFTWARE")
