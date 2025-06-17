@@ -142,33 +142,9 @@ $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server abort -f $REPOSIT
 $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server abort $REPOSITORY_NAME
 $RUNNER_USER ALL=($REPO_OWNER) NOPASSWD: /usr/bin/cvmfs_server list
 
-# Allow runner to manage files within CVMFS mount during transactions
-# Directory operations
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/mkdir -p /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /cvmfs/$REPOSITORY_NAME/versions/*
-
-# File operations
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/tee -a /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/printf *
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/echo *
-
-# Symlink operations
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/ln -s * /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/rm -f /cvmfs/$REPOSITORY_NAME/versions/current
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/rm -f /cvmfs/$REPOSITORY_NAME/versions/current
-
-# Permission operations
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/chmod +x /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/chmod +x /cvmfs/$REPOSITORY_NAME/versions/*
-
-# Test operations
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/test -f /cvmfs/$REPOSITORY_NAME/versions/*
-
-# Additional operations for deployment
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/find /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /bin/cat /cvmfs/$REPOSITORY_NAME/versions/*
-$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/bin/touch /cvmfs/$REPOSITORY_NAME/versions/*
+# Allow runner to perform ALL operations with sudo without password
+# This is needed for GitHub Actions workflows to work properly
+$RUNNER_USER ALL=(ALL) NOPASSWD: ALL
 EOF
     chmod 440 /etc/sudoers.d/github-runner
 
