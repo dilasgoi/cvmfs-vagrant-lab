@@ -11,6 +11,12 @@ on:
         description: 'Target quarter (e.g., 2025.Q1)'
         required: false
         type: string
+  workflow_call:
+    inputs:
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
+        required: false
+        type: string
 
 env:
   CVMFS_REPOSITORY: software.lab.local
@@ -51,22 +57,22 @@ jobs:
           IS_PRIMARY="${{ matrix.is_primary }}"
           STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
           
-          echo "🚀 Publisher: $(hostname)"
-          echo "📅 Quarter: $QUARTER"
-          echo "🏗️ Architecture: $CVMFS_ARCH"
+          echo "Publisher: $(hostname)"
+          echo "Quarter: $QUARTER"
+          echo "Architecture: $CVMFS_ARCH"
           
           # Start transaction
           echo "Starting CVMFS transaction..."
           sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY 2>/dev/null || true
           
           if ! sudo -u vagrant cvmfs_server transaction $CVMFS_REPOSITORY; then
-            echo "❌ Failed to start transaction"
+            echo "ERROR: Failed to start transaction"
             exit 1
           fi
           
           # If primary publisher, create the full directory structure
           if [[ "$IS_PRIMARY" == "true" ]]; then
-            echo "📁 Creating directory structure..."
+            echo "Creating directory structure..."
             
             # Ensure base versions directory exists
             sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions"
@@ -95,14 +101,14 @@ jobs:
               # Create deployment marker
               echo "$(date)" | sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" > /dev/null
               
-              echo "✅ Directory structure created"
+              echo "SUCCESS: Directory structure created"
             else
-              echo "✓ Structure already exists"
+              echo "Structure already exists"
             fi
           fi
           
           # Deploy software for this architecture
-          echo "📦 Deploying software to $CVMFS_ARCH..."
+          echo "Deploying software to $CVMFS_ARCH..."
           STACK_PATH="$STACK_BASE/$CVMFS_ARCH"
           
           # Process EasyBuild configs
@@ -128,19 +134,19 @@ jobs:
               echo "    Creating directory: $INSTALL_DIR/bin"
               
               if ! sudo mkdir -p "$INSTALL_DIR/bin"; then
-                echo "    ✗ Failed to create directory"
+                echo "    FAILED: Failed to create directory"
                 FAILED=1
                 continue
               fi
               
-              echo "    ✓ Directory created"
+              echo "    SUCCESS: Directory created"
               
               # Create mock binary
               BINARY_FILE="$INSTALL_DIR/bin/$SOFTWARE"
               echo "    Creating binary: $BINARY_FILE"
               
               # Create binary content in a temporary file first
-              TEMP_BINARY="/tmp/${SOFTWARE}_binary_$"
+              TEMP_BINARY="/tmp/${SOFTWARE}_binary_$$"
               {
                 echo '#!/bin/bash'
                 echo "echo \"$SOFTWARE version $VERSION\""
@@ -151,7 +157,7 @@ jobs:
               
               # Copy to CVMFS
               if ! sudo cp "$TEMP_BINARY" "$BINARY_FILE"; then
-                echo "    ✗ Failed to create binary"
+                echo "    FAILED: Failed to create binary"
                 rm -f "$TEMP_BINARY"
                 FAILED=1
                 continue
@@ -159,12 +165,12 @@ jobs:
               
               rm -f "$TEMP_BINARY"
               sudo chmod +x "$BINARY_FILE"
-              echo "    ✓ Binary created"
+              echo "    SUCCESS: Binary created"
               
               # Create module file
               MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
               if ! sudo mkdir -p "$MODULE_DIR"; then
-                echo "    ✗ Failed to create module directory"
+                echo "    FAILED: Failed to create module directory"
                 FAILED=1
                 continue
               fi
@@ -173,7 +179,7 @@ jobs:
               echo "    Creating module: $MODULE_FILE"
               
               # Create module in temporary file
-              TEMP_MODULE="/tmp/${SOFTWARE}_module_$"
+              TEMP_MODULE="/tmp/${SOFTWARE}_module_$$"
               {
                 echo '-- -*- lua -*-'
                 echo "help([[$SOFTWARE version $VERSION]])"
@@ -188,17 +194,17 @@ jobs:
               
               # Copy to CVMFS
               if ! sudo cp "$TEMP_MODULE" "$MODULE_FILE"; then
-                echo "    ✗ Failed to create module"
+                echo "    FAILED: Failed to create module"
                 rm -f "$TEMP_MODULE"
                 FAILED=1
                 continue
               fi
               
               rm -f "$TEMP_MODULE"
-              echo "    ✓ Module created"
+              echo "    SUCCESS: Module created"
               
               ((EB_COUNT++))
-              echo "  ✅ Successfully deployed $SOFTWARE"
+              echo "  Successfully deployed $SOFTWARE"
             fi
           done
           
@@ -206,17 +212,17 @@ jobs:
           echo "Summary: Deployed $EB_COUNT packages to $CVMFS_ARCH"
           
           if [[ $FAILED -ne 0 ]]; then
-            echo "⚠️  Some deployments failed, but continuing..."
+            echo "WARNING: Some deployments failed, but continuing..."
           fi
           
           # Publish transaction
           echo
           echo "Publishing changes..."
           if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
-            echo "✅ Successfully published!"
+            echo "SUCCESS: Successfully published!"
             exit 0
           else
-            echo "❌ Publish failed"
+            echo "ERROR: Publish failed"
             sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
             exit 1
           fi
@@ -228,16 +234,16 @@ jobs:
     steps:
       - name: Deployment Summary
         run: |
-          echo "## 📦 HPC Software Stack Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "## HPC Software Stack Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ needs.deploy-software.result }}" == "success" ]]; then
-            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "### Deployment Successful!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "The software stack has been deployed with:" >> $GITHUB_STEP_SUMMARY
             echo "- Directory structure for all architectures" >> $GITHUB_STEP_SUMMARY
             echo "- Software packages from EasyBuild configs" >> $GITHUB_STEP_SUMMARY
             echo "- Module files for each package" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
           fi

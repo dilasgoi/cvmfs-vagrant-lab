@@ -12,6 +12,17 @@ on:
         required: false
         default: 'all'
         type: string
+  workflow_call:
+    inputs:
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
+        required: false
+        type: string
+      architectures:
+        description: 'Architectures to build (comma-separated, or "all")'
+        required: false
+        default: 'all'
+        type: string
 
 env:
   CVMFS_REPOSITORY: software.lab.local
