@@ -20,7 +20,7 @@ install_archspec() {
     pip3 install archspec
 
     # Verify installation
-    if archspec cpu --help >/dev/null 2>&1; then
+    if python3 -c "import archspec.cpu; print(archspec.cpu.host())" >/dev/null 2>&1; then
         log_success "archspec installed successfully"
     else
         log_error "Failed to install archspec"
@@ -34,19 +34,30 @@ detect_architecture() {
     log_info "Detecting CPU microarchitecture"
 
     # Try archspec first
-    if command -v archspec >/dev/null 2>&1; then
-        # Get detailed CPU info
-        ARCHSPEC_JSON=$(archspec cpu --json)
-        ARCHSPEC_NAME=$(echo "$ARCHSPEC_JSON" | jq -r '.name' 2>/dev/null || echo "unknown")
-        ARCHSPEC_VENDOR=$(echo "$ARCHSPEC_JSON" | jq -r '.vendor' 2>/dev/null || echo "unknown")
-        ARCHSPEC_GENERATION=$(echo "$ARCHSPEC_JSON" | jq -r '.generation' 2>/dev/null || echo "0")
-        ARCHSPEC_FEATURES=$(echo "$ARCHSPEC_JSON" | jq -r '.features[]' 2>/dev/null | tr '\n' ' ' || echo "")
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import archspec.cpu" 2>/dev/null; then
+        # Use Python to get archspec info
+        ARCHSPEC_JSON=$(python3 -c "
+import json
+import archspec.cpu
+host = archspec.cpu.host()
+print(json.dumps(host.to_dict()))
+" 2>/dev/null)
 
-        log_info "Detected CPU: $ARCHSPEC_VENDOR $ARCHSPEC_NAME"
-        log_info "Features: $ARCHSPEC_FEATURES"
+        if [[ -n "$ARCHSPEC_JSON" ]]; then
+            ARCHSPEC_NAME=$(echo "$ARCHSPEC_JSON" | jq -r '.name' 2>/dev/null || echo "unknown")
+            ARCHSPEC_VENDOR=$(echo "$ARCHSPEC_JSON" | jq -r '.vendor' 2>/dev/null || echo "unknown")
+            ARCHSPEC_GENERATION=$(echo "$ARCHSPEC_JSON" | jq -r '.generation' 2>/dev/null || echo "0")
+            ARCHSPEC_FEATURES=$(echo "$ARCHSPEC_JSON" | jq -r '.features[]' 2>/dev/null | tr '\n' ' ' || echo "")
 
-        # Map to our architecture scheme
-        map_architecture_to_cvmfs
+            log_info "Detected CPU: $ARCHSPEC_VENDOR $ARCHSPEC_NAME"
+            log_info "Features: $ARCHSPEC_FEATURES"
+
+            # Map to our architecture scheme
+            map_architecture_to_cvmfs
+        else
+            log_warning "archspec detection failed, using fallback"
+            fallback_architecture_detection
+        fi
     else
         log_warning "archspec not available, using fallback detection"
         fallback_architecture_detection
