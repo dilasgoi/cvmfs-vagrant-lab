@@ -1,0 +1,55 @@
+
+# Architecture configuration matrix for Gentoo Prefix
+# Defines optimization flags for each microarchitecture
+
+architectures:
+  # Generic fallback
+  generic:
+    path: "generic"
+    cflags: "-O2 -pipe -fomit-frame-pointer"
+    cpu_flags: ""
+    description: "Generic x86_64 compatible with all CPUs"
+    
+  # Intel architectures
+  intel_haswell:
+    path: "intel/haswell"
+    cflags: "-march=haswell -O2 -pipe"
+    cpu_flags: "aes avx avx2 f16c fma3 mmx pclmul popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
+    description: "Intel Haswell and compatible (AVX2)"
+    
+  intel_skylake_avx512:
+    path: "intel/skylake_avx512"
+    cflags: "-march=skylake-avx512 -O2 -pipe"
+    cpu_flags: "aes avx avx2 avx512cd avx512f avx512bw avx512dq avx512vl f16c fma3 mmx pclmul popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
+    description: "Intel Skylake-X with AVX-512"
+    
+  intel_icelake:
+    path: "intel/icelake"
+    cflags: "-march=icelake-server -O2 -pipe"
+    cpu_flags: "aes avx avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni f16c fma3 mmx pclmul popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3"
+    description: "Intel Ice Lake (AVX-512 + VNNI)"
+    
+  intel_sapphirerapids:
+    path: "intel/sapphirerapids"
+    cflags: "-march=sapphirerapids -O2 -pipe"
+    cpu_flags: "aes avx avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni avx512_bf16 amx_bf16 amx_tile amx_int8 f16c fma3"
+    description: "Intel Sapphire Rapids (AVX-512 + AMX)"
+    
+  # AMD architectures  
+  amd_zen2:
+    path: "amd/zen2"
+    cflags: "-march=znver2 -O2 -pipe"
+    cpu_flags: "aes avx avx2 f16c fma3 mmx pclmul popcnt sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3"
+    description: "AMD Zen 2 (EPYC 7002 series)"
+    
+  amd_zen3:
+    path: "amd/zen3"
+    cflags: "-march=znver3 -O2 -pipe"
+    cpu_flags: "aes avx avx2 f16c fma3 mmx pclmul popcnt sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3 vpclmulqdq"
+    description: "AMD Zen 3 (EPYC 7003 series)"
+    
+  amd_zen4:
+    path: "amd/zen4"
+    cflags: "-march=znver4 -O2 -pipe"
+    cpu_flags: "aes avx avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni f16c fma3"
+    description: "AMD Zen 4 (EPYC 9004 series with AVX-512)"

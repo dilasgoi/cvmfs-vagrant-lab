@@ -1,0 +1,73 @@
+name: Deploy Complete Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: 'Target quarter (e.g., 2025.Q1)'
+        required: false
+        type: string
+      deploy_compat:
+        description: 'Deploy compatibility layer'
+        required: true
+        type: boolean
+        default: false
+      deploy_software:
+        description: 'Deploy software stack'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  deploy-compat-layer:
+    if: ${{ inputs.deploy_compat }}
+    uses: ./.github/workflows/deploy-compat.yml
+    with:
+      quarter: ${{ inputs.quarter }}
+      architectures: all
+
+  deploy-software-stack:
+    if: ${{ inputs.deploy_software }}
+    needs: [deploy-compat-layer]
+    # Run even if compat layer was skipped
+    if: |
+      always() && 
+      (needs.deploy-compat-layer.result == 'success' || needs.deploy-compat-layer.result == 'skipped') &&
+      inputs.deploy_software
+    uses: ./.github/workflows/deploy-software.yml
+    with:
+      quarter: ${{ inputs.quarter }}
+
+  summary:
+    needs: [deploy-compat-layer, deploy-software-stack]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "## Complete Stack Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Compat layer status
+          if [[ "${{ inputs.deploy_compat }}" == "true" ]]; then
+            if [[ "${{ needs.deploy-compat-layer.result }}" == "success" ]]; then
+              echo "### Compatibility Layer: SUCCESS" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### Compatibility Layer: FAILED" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### Compatibility Layer: SKIPPED" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Software stack status
+          if [[ "${{ inputs.deploy_software }}" == "true" ]]; then
+            if [[ "${{ needs.deploy-software-stack.result }}" == "success" ]]; then
+              echo "### Software Stack: SUCCESS" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### Software Stack: FAILED" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### Software Stack: SKIPPED" >> $GITHUB_STEP_SUMMARY
+          fi
