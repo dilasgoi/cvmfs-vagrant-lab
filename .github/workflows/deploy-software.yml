@@ -16,37 +16,113 @@ on:
         required: false
         default: 'current'
         type: string
-  workflow_call:
-    inputs:
-      quarter:
-        description: 'Target quarter (e.g., 2025.Q1)'
-        required: false
-        type: string
-      compat_version:
-        description: 'Compat layer version to use (e.g., 2024.2)'
-        required: false
-        default: 'current'
-        type: string
 
 env:
   CVMFS_REPOSITORY: software.lab.local
 
 jobs:
   deploy-software:
-    runs-on: [self-hosted, linux, cvmfs-publisher, "${{ matrix.arch }}"]
+    # Runners must have: self-hosted, linux, cvmfs-publisher
+    # They will also have architecture labels like: x86-64-v3, x86-64-v4
+    runs-on: [self-hosted, linux, cvmfs-publisher]
     strategy:
-      matrix:
-        include:
-          - arch: x86-64-v3
-            cvmfs_arch: intel/haswell
-            is_primary: true  # This publisher creates structure
-          - arch: x86-64-v4
-            cvmfs_arch: intel/skylake_avx512
-            is_primary: false
-      max-parallel: 1  # Sequential to avoid conflicts
+      # Run on all available publishers, they'll detect their own architecture
+      max-parallel: 1  # Sequential to avoid CVMFS transaction conflicts
     
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Detect Architecture
+        id: detect-arch
+        run: |
+          set +e  # Don't exit on error immediately
+          
+          echo "Detecting architecture for $(hostname)..."
+          
+          # Method 1: Check if architecture was detected during provisioning
+          if [[ -f /etc/cvmfs-publisher/architecture.json ]]; then
+            echo "Using pre-detected architecture from provisioning"
+            ARCH_LABEL=$(jq -r '.arch_label' /etc/cvmfs-publisher/architecture.json)
+            CVMFS_ARCH=$(jq -r '.cvmfs_arch' /etc/cvmfs-publisher/architecture.json)
+            IS_PRIMARY=$(jq -r '.is_primary' /etc/cvmfs-publisher/architecture.json)
+            ARCH_FEATURES=$(jq -r '.arch_features' /etc/cvmfs-publisher/architecture.json)
+          
+          # Method 2: Try archspec if available
+          elif command -v archspec >/dev/null 2>&1; then
+            echo "Using archspec for detection"
+            ARCHSPEC_JSON=$(archspec cpu --json)
+            ARCHSPEC_NAME=$(echo "$ARCHSPEC_JSON" | jq -r '.name')
+            
+            # Map archspec to our scheme
+            case "$ARCHSPEC_NAME" in
+              skylake_avx512|cascadelake|cooperlake|icelake*)
+                ARCH_LABEL="x86-64-v4"
+                CVMFS_ARCH="intel/skylake_avx512"
+                ARCH_FEATURES="AVX512"
+                ;;
+              haswell|broadwell|skylake)
+                ARCH_LABEL="x86-64-v3"
+                CVMFS_ARCH="intel/haswell"
+                ARCH_FEATURES="AVX2"
+                ;;
+              zen|zen2|zen3)
+                ARCH_LABEL="x86-64-v3"
+                CVMFS_ARCH="amd/zen3"
+                ARCH_FEATURES="AVX2"
+                ;;
+              zen4)
+                ARCH_LABEL="x86-64-v4"
+                CVMFS_ARCH="amd/zen4"
+                ARCH_FEATURES="AVX512"
+                ;;
+              *)
+                ARCH_LABEL="x86-64-v2"
+                CVMFS_ARCH="generic"
+                ARCH_FEATURES="SSE4.2"
+                ;;
+            esac
+            
+            # Determine if this should be primary (first v3 node)
+            if [[ "$ARCH_LABEL" == "x86-64-v3" ]] && [[ ! -f /tmp/cvmfs-primary-claimed ]]; then
+              IS_PRIMARY="true"
+              touch /tmp/cvmfs-primary-claimed
+            else
+              IS_PRIMARY="false"
+            fi
+          
+          # Method 3: Fallback to cpuinfo
+          else
+            echo "Falling back to /proc/cpuinfo detection"
+            if grep -q "avx512" /proc/cpuinfo; then
+              ARCH_LABEL="x86-64-v4"
+              CVMFS_ARCH="intel/skylake_avx512"
+              ARCH_FEATURES="AVX512"
+              IS_PRIMARY="false"
+            elif grep -q "avx2" /proc/cpuinfo; then
+              ARCH_LABEL="x86-64-v3"
+              CVMFS_ARCH="intel/haswell"
+              ARCH_FEATURES="AVX2"
+              IS_PRIMARY="true"  # Assume first v3 is primary
+            else
+              ARCH_LABEL="x86-64-v2"
+              CVMFS_ARCH="generic"
+              ARCH_FEATURES="SSE4.2"
+              IS_PRIMARY="false"
+            fi
+          fi
+          
+          # Output results
+          echo "Detected architecture:"
+          echo "  Label: $ARCH_LABEL"
+          echo "  CVMFS Path: $CVMFS_ARCH"
+          echo "  Features: $ARCH_FEATURES"
+          echo "  Is Primary: $IS_PRIMARY"
+          
+          # Set outputs for subsequent steps
+          echo "arch_label=$ARCH_LABEL" >> $GITHUB_OUTPUT
+          echo "cvmfs_arch=$CVMFS_ARCH" >> $GITHUB_OUTPUT
+          echo "is_primary=$IS_PRIMARY" >> $GITHUB_OUTPUT
+          echo "arch_features=$ARCH_FEATURES" >> $GITHUB_OUTPUT
       
       - name: Set Quarter
         id: set-quarter
@@ -59,21 +135,9 @@ jobs:
           echo "Quarter: $QUARTER"
           echo "QUARTER=$QUARTER" >> $GITHUB_ENV
       
-      - name: Deploy to CVMFS
+      - name: Start CVMFS Transaction
+        id: start-transaction
         run: |
-          set +e  # Don't exit on error immediately
-          
-          CVMFS_ARCH="${{ matrix.cvmfs_arch }}"
-          IS_PRIMARY="${{ matrix.is_primary }}"
-          COMPAT_VERSION="${{ inputs.compat_version }}"
-          STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
-          
-          echo "Publisher: $(hostname)"
-          echo "Quarter: $QUARTER"
-          echo "Architecture: $CVMFS_ARCH"
-          echo "Compat Layer: $COMPAT_VERSION"
-          
-          # Start transaction
           echo "Starting CVMFS transaction..."
           sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY 2>/dev/null || true
           
@@ -81,42 +145,49 @@ jobs:
             echo "ERROR: Failed to start transaction"
             exit 1
           fi
+          echo "transaction_started=true" >> $GITHUB_OUTPUT
+      
+      - name: Create Directory Structure (Primary Only)
+        if: steps.detect-arch.outputs.is_primary == 'true'
+        run: |
+          QUARTER="${{ env.QUARTER }}"
+          COMPAT_VERSION="${{ inputs.compat_version }}"
+          STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
           
-          # If primary publisher, create the full directory structure
-          if [[ "$IS_PRIMARY" == "true" ]]; then
-            echo "Creating directory structure..."
+          echo "Creating directory structure (primary publisher duty)..."
+          
+          # Ensure base versions directory exists
+          sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions"
+          
+          # Check if structure already exists
+          if [[ ! -f "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" ]]; then
+            # Create quarter directory
+            sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER"
             
-            # Ensure base versions directory exists
-            sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions"
-            
-            # Check if structure already exists
-            if [[ ! -f "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" ]]; then
-              # Create quarter directory
-              sudo mkdir -p "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER"
+            # Create all architecture directories
+            for arch_path in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3 amd/zen4; do
+              echo "  Creating $arch_path..."
+              sudo mkdir -p "$STACK_BASE/$arch_path/software"
+              sudo mkdir -p "$STACK_BASE/$arch_path/modules/all"
               
-              # Create all architecture directories
-              for arch_path in generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3; do
-                echo "  Creating $arch_path..."
-                sudo mkdir -p "$STACK_BASE/$arch_path/software"
-                sudo mkdir -p "$STACK_BASE/$arch_path/modules/all"
-                
-                # Create architecture info file
-                sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null << ARCH_EOF
+              # Create architecture info file
+              sudo tee "$STACK_BASE/$arch_path/ARCHITECTURE" > /dev/null << ARCH_EOF
           Architecture: $arch_path
           Created: $(date)
           Quarter: $QUARTER
+          Compat: $COMPAT_VERSION
           ARCH_EOF
-              done
-              
-              # Create symlink for current version
-              echo "Creating 'current' symlink..."
-              CURRENT_LINK="/cvmfs/$CVMFS_REPOSITORY/versions/current"
-              sudo rm -f "$CURRENT_LINK"
-              sudo ln -s "$QUARTER" "$CURRENT_LINK"
-              
-              # Create README at root
-              echo "Creating documentation..."
-              sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/README.md" > /dev/null << 'README_EOF'
+            done
+            
+            # Create symlink for current version
+            echo "Creating 'current' symlink..."
+            CURRENT_LINK="/cvmfs/$CVMFS_REPOSITORY/versions/current"
+            sudo rm -f "$CURRENT_LINK"
+            sudo ln -s "$QUARTER" "$CURRENT_LINK"
+            
+            # Create README at root
+            echo "Creating documentation..."
+            sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/README.md" > /dev/null << 'README_EOF'
           # CVMFS Software Stack
           
           ## Structure
@@ -131,18 +202,20 @@ jobs:
           │       ├── intel/skylake_avx512/
           │       ├── intel/icelake/
           │       ├── amd/zen2/
-          │       └── amd/zen3/
+          │       ├── amd/zen3/
+          │       └── amd/zen4/
           └── README.md
           ```
           
           ## Architecture Mapping
           
-          - **generic**: Fallback for unknown CPUs
-          - **intel/haswell**: AVX2 support (Publisher 1)
-          - **intel/skylake_avx512**: AVX512 support (Publisher 2)
+          - **generic**: Fallback for unknown CPUs (x86-64-v2)
+          - **intel/haswell**: AVX2 support (x86-64-v3)
+          - **intel/skylake_avx512**: AVX512 support (x86-64-v4)
           - **intel/icelake**: Ice Lake and newer
           - **amd/zen2**: AMD EPYC 7002 series
-          - **amd/zen3**: AMD EPYC 7003 series
+          - **amd/zen3**: AMD EPYC 7003 series (x86-64-v3)
+          - **amd/zen4**: AMD EPYC 9004 series (x86-64-v4)
           
           ## Accessing Software
           
@@ -154,23 +227,40 @@ jobs:
           module use /cvmfs/software.lab.local/versions/2025.Q1/software/linux/x86_64/intel/haswell/modules/all
           ```
           README_EOF
-              
-              # Create deployment marker
-              sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" > /dev/null << DEPLOY_EOF
+            
+            # Create deployment marker
+            sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.deployed" > /dev/null << DEPLOY_EOF
           Deployed: $(date)
           Structure Version: 1.0
-          Architectures: generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3
+          Architectures: generic intel/haswell intel/skylake_avx512 intel/icelake amd/zen2 amd/zen3 amd/zen4
           DEPLOY_EOF
-              
-              echo "SUCCESS: Directory structure created"
-            else
-              echo "Structure already exists"
-            fi
+            
+            # Create compat version mapping
+            sudo tee "/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/.compat-version" > /dev/null << COMPAT_EOF
+          # Compatibility layer version for this software release
+          COMPAT_VERSION="$COMPAT_VERSION"
+          COMPAT_PATH="/cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/$COMPAT_VERSION"
+          COMPAT_EOF
+            
+            echo "SUCCESS: Directory structure created"
+          else
+            echo "Structure already exists"
           fi
+      
+      - name: Deploy Software for Detected Architecture
+        run: |
+          set +e  # Don't exit on error for individual packages
           
-          # Deploy software for this architecture
-          echo "Deploying software to $CVMFS_ARCH..."
+          CVMFS_ARCH="${{ steps.detect-arch.outputs.cvmfs_arch }}"
+          ARCH_LABEL="${{ steps.detect-arch.outputs.arch_label }}"
+          ARCH_FEATURES="${{ steps.detect-arch.outputs.arch_features }}"
+          QUARTER="${{ env.QUARTER }}"
+          COMPAT_VERSION="${{ inputs.compat_version }}"
+          STACK_BASE="/cvmfs/$CVMFS_REPOSITORY/versions/$QUARTER/software/linux/x86_64"
           STACK_PATH="$STACK_BASE/$CVMFS_ARCH"
+          
+          echo "Deploying software for architecture: $CVMFS_ARCH ($ARCH_LABEL)"
+          echo "CPU Features: $ARCH_FEATURES"
           
           # Process EasyBuild configs
           EB_COUNT=0
@@ -189,6 +279,7 @@ jobs:
               echo "    Software: $SOFTWARE"
               echo "    Version: $VERSION"
               echo "    Toolchain: $TOOLCHAIN"
+              echo "    Target arch: $CVMFS_ARCH"
               
               # Create installation directory
               INSTALL_DIR="$STACK_PATH/software/$SOFTWARE/$VERSION-$TOOLCHAIN"
@@ -196,11 +287,9 @@ jobs:
               
               if ! sudo mkdir -p "$INSTALL_DIR/bin"; then
                 echo "    FAILED: Failed to create directory"
-                FAILED=1
+                ((FAILED++))
                 continue
               fi
-              
-              echo "    SUCCESS: Directory created"
               
               # Create mock binary
               BINARY_FILE="$INSTALL_DIR/bin/$SOFTWARE"
@@ -211,9 +300,11 @@ jobs:
               cat > "$TEMP_BINARY" << BINARY_EOF
           #!/bin/bash
           echo "$SOFTWARE version $VERSION"
-          echo "Architecture: $CVMFS_ARCH (\$(hostname))"
+          echo "Architecture: $CVMFS_ARCH ($(hostname))"
+          echo "Optimized for: $ARCH_LABEL ($ARCH_FEATURES)"
           echo "Toolchain: $TOOLCHAIN"
           echo "Quarter: $QUARTER"
+          echo "Built on: $(date)"
           echo "Using Gentoo Prefix: /cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/$COMPAT_VERSION"
           BINARY_EOF
               
@@ -221,7 +312,7 @@ jobs:
               if ! sudo cp "$TEMP_BINARY" "$BINARY_FILE"; then
                 echo "    FAILED: Failed to create binary"
                 rm -f "$TEMP_BINARY"
-                FAILED=1
+                ((FAILED++))
                 continue
               fi
               
@@ -233,7 +324,7 @@ jobs:
               MODULE_DIR="$STACK_PATH/modules/all/$SOFTWARE"
               if ! sudo mkdir -p "$MODULE_DIR"; then
                 echo "    FAILED: Failed to create module directory"
-                FAILED=1
+                ((FAILED++))
                 continue
               fi
               
@@ -244,21 +335,37 @@ jobs:
               TEMP_MODULE="/tmp/${SOFTWARE}_module_$$"
               cat > "$TEMP_MODULE" << MODULE_EOF
           -- -*- lua -*-
-          help([[$SOFTWARE version $VERSION - Mock module for CVMFS Lab]])
-          whatis("Description: Mock $SOFTWARE built with $TOOLCHAIN")
+          help([[$SOFTWARE version $VERSION]])
+          whatis("Name: $SOFTWARE")
           whatis("Version: $VERSION")
+          whatis("Description: Mock $SOFTWARE built with $TOOLCHAIN")
+          whatis("Architecture: $CVMFS_ARCH ($ARCH_LABEL)")
+          whatis("Features: $ARCH_FEATURES")
           
-          prepend_path("PATH", "$INSTALL_DIR/bin")
-          prepend_path("LD_LIBRARY_PATH", "$INSTALL_DIR/lib")
+          -- Set up Gentoo Prefix environment
+          local compat_version = "$COMPAT_VERSION"
+          local eprefix = "/cvmfs/$CVMFS_REPOSITORY/compat/gentoo-prefix/" .. compat_version .. "/linux/x86_64/$CVMFS_ARCH"
           
-          setenv("${SOFTWARE^^}_ROOT", "$INSTALL_DIR")
+          if isDir(eprefix) then
+              prepend_path("PATH", pathJoin(eprefix, "usr/bin"))
+              prepend_path("LD_LIBRARY_PATH", pathJoin(eprefix, "usr/lib64"))
+              setenv("EPREFIX", eprefix)
+          end
+          
+          -- Software paths
+          local root = "$INSTALL_DIR"
+          prepend_path("PATH", pathJoin(root, "bin"))
+          prepend_path("LD_LIBRARY_PATH", pathJoin(root, "lib"))
+          
+          setenv("${SOFTWARE^^}_ROOT", root)
+          setenv("${SOFTWARE^^}_ARCH", "$ARCH_LABEL")
           MODULE_EOF
               
               # Copy to CVMFS
               if ! sudo cp "$TEMP_MODULE" "$MODULE_FILE"; then
                 echo "    FAILED: Failed to create module"
                 rm -f "$TEMP_MODULE"
-                FAILED=1
+                ((FAILED++))
                 continue
               fi
               
@@ -271,23 +378,38 @@ jobs:
           done
           
           echo
-          echo "Summary: Deployed $EB_COUNT packages to $CVMFS_ARCH"
+          echo "Summary for $CVMFS_ARCH: Deployed $EB_COUNT packages, $FAILED failed"
           
-          if [[ $FAILED -ne 0 ]]; then
-            echo "WARNING: Some deployments failed, but continuing..."
-          fi
-          
-          # Publish transaction
-          echo
+          # Save summary for job output
+          echo "eb_count=$EB_COUNT" >> $GITHUB_ENV
+          echo "failed_count=$FAILED" >> $GITHUB_ENV
+      
+      - name: Publish CVMFS Changes
+        if: always() && steps.start-transaction.outputs.transaction_started == 'true'
+        run: |
           echo "Publishing changes..."
           if sudo -u vagrant cvmfs_server publish $CVMFS_REPOSITORY; then
             echo "SUCCESS: Successfully published!"
-            exit 0
+            echo "publish_status=success" >> $GITHUB_ENV
           else
-            echo "ERROR: Publish failed"
+            echo "ERROR: Publish failed, aborting transaction"
             sudo -u vagrant cvmfs_server abort -f $CVMFS_REPOSITORY
+            echo "publish_status=failed" >> $GITHUB_ENV
             exit 1
           fi
+      
+      - name: Job Summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### Publisher: $(hostname)
+          - **Architecture**: ${{ steps.detect-arch.outputs.arch_label }} (${{ steps.detect-arch.outputs.cvmfs_arch }})
+          - **Features**: ${{ steps.detect-arch.outputs.arch_features }}
+          - **Primary Publisher**: ${{ steps.detect-arch.outputs.is_primary }}
+          - **Packages Deployed**: ${{ env.eb_count || '0' }}
+          - **Failed**: ${{ env.failed_count || '0' }}
+          - **Publish Status**: ${{ env.publish_status || 'unknown' }}
+          EOF
 
   summary:
     needs: deploy-software
@@ -302,11 +424,13 @@ jobs:
           if [[ "${{ needs.deploy-software.result }}" == "success" ]]; then
             echo "### Deployment Successful!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The software stack has been deployed with:" >> $GITHUB_STEP_SUMMARY
-            echo "- Directory structure for all architectures" >> $GITHUB_STEP_SUMMARY
-            echo "- Software packages from EasyBuild configs" >> $GITHUB_STEP_SUMMARY
-            echo "- Module files for each package" >> $GITHUB_STEP_SUMMARY
-            echo "- Linked to compat layer: ${{ inputs.compat_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "The software stack has been deployed:" >> $GITHUB_STEP_SUMMARY
+            echo "- Quarter: ${{ env.QUARTER || github.event.inputs.quarter || 'Auto-detected' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Compat layer: ${{ github.event.inputs.compat_version || 'current' }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Each publisher deployed software optimized for its detected architecture." >> $GITHUB_STEP_SUMMARY
           else
             echo "### Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check individual job logs for details." >> $GITHUB_STEP_SUMMARY
           fi
