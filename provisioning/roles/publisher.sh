@@ -204,6 +204,30 @@ install_packages() {
         || die "Failed to install CVMFS packages"
 }
 
+prepare_for_containers() {
+    log_info "Preparing VM for container execution"
+
+    # Ensure kernel modules are loaded
+    modprobe fuse || log_warning "Failed to load fuse module"
+    modprobe overlay || log_warning "Failed to load overlay module"
+
+    # Make modules persistent
+    echo -e "fuse\noverlay" > /etc/modules-load.d/cvmfs-containers.conf
+
+    # Fix /dev/fuse permissions for containers
+    if [[ -c /dev/fuse ]]; then
+        chmod 666 /dev/fuse
+        # Make it persistent with udev rule
+        echo 'KERNEL=="fuse", MODE="0666"' > /etc/udev/rules.d/99-fuse.rules
+    fi
+
+    # Enable user namespaces for containers
+    echo "user.max_user_namespaces=28633" > /etc/sysctl.d/99-containers.conf
+    sysctl -p /etc/sysctl.d/99-containers.conf >/dev/null 2>&1
+
+    log_success "VM prepared for containers"
+}
+
 # Wait for gateway to be ready
 wait_for_gateway() {
     log_info "Waiting for Gateway to be ready..."
@@ -369,101 +393,6 @@ EOSERVICE
 
     systemctl daemon-reload
     systemctl enable github-runner
-}
-
-# Setup mock EasyBuild environment
-setup_mock_easybuild() {
-    log_info "Setting up mock EasyBuild environment"
-
-    # Create mock easybuild command that works with CVMFS transactions
-    cat > /usr/local/bin/easybuild << 'EOF'
-#!/bin/bash
-# Mock EasyBuild for CVMFS Lab - installs directly into CVMFS repository
-
-CVMFS_REPO="/cvmfs/software.lab.local"
-ARCH=$(cat /etc/cvmfs-arch 2>/dev/null || echo "generic")
-
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --version)
-            echo "EasyBuild 4.8.0 (mock for CVMFS)"
-            exit 0
-            ;;
-        --help)
-            echo "Mock EasyBuild for CVMFS Lab"
-            echo "Usage: easybuild <easyconfig.eb> [options]"
-            echo "Options:"
-            echo "  --robot                 Enable dependency resolution"
-            echo "  --prefix=PATH          Installation prefix (ignored, uses CVMFS)"
-            exit 0
-            ;;
-        *.eb)
-            EASYCONFIG="$1"
-            ;;
-    esac
-    shift
-done
-
-if [[ -n "$EASYCONFIG" ]]; then
-    # Extract software info from filename
-    BASENAME=$(basename "$EASYCONFIG" .eb)
-    SOFTWARE=$(echo "$BASENAME" | cut -d- -f1)
-    VERSION=$(echo "$BASENAME" | cut -d- -f2)
-    TOOLCHAIN=$(echo "$BASENAME" | cut -d- -f3,4)
-
-    echo "== Building $SOFTWARE/$VERSION with toolchain $TOOLCHAIN for $ARCH =="
-    echo "== Installing directly into CVMFS repository =="
-
-    # Check if we're in a CVMFS transaction
-    if ! mountpoint -q "$CVMFS_REPO"; then
-        echo "ERROR: CVMFS repository not mounted. Start a transaction first!"
-        exit 1
-    fi
-
-    # Simulate build steps
-    echo "== Fetching sources..."
-    sleep 1
-    echo "== Configuring..."
-    sleep 1
-    echo "== Building... (this would take 5-30 minutes for real software)"
-    sleep 2
-    echo "== Installing..."
-
-    # Create installation in CVMFS
-    INSTALL_DIR="$CVMFS_REPO/software/$ARCH/$SOFTWARE/$VERSION-$TOOLCHAIN"
-    sudo mkdir -p "$INSTALL_DIR/bin"
-
-    # Create a mock binary
-    cat << EOFBIN | sudo tee "$INSTALL_DIR/bin/$SOFTWARE" > /dev/null
-#!/bin/bash
-echo "$SOFTWARE version $VERSION"
-echo "Built with toolchain: $TOOLCHAIN"
-echo "Architecture: $ARCH"
-echo "This is a mock binary for CVMFS Lab"
-EOFBIN
-    sudo chmod +x "$INSTALL_DIR/bin/$SOFTWARE"
-
-    # Create module file
-    MODULE_DIR="$CVMFS_REPO/modules/$ARCH/all/$SOFTWARE"
-    sudo mkdir -p "$MODULE_DIR"
-    cat << EOFMOD | sudo tee "$MODULE_DIR/$VERSION-$TOOLCHAIN.lua" > /dev/null
-help([[$SOFTWARE version $VERSION - Mock module for CVMFS Lab]])
-whatis("Description: Mock $SOFTWARE built with $TOOLCHAIN")
-whatis("Version: $VERSION")
-
-prepend_path("PATH", "$INSTALL_DIR/bin")
-prepend_path("LD_LIBRARY_PATH", "$INSTALL_DIR/lib")
-
-setenv("${SOFTWARE^^}_ROOT", "$INSTALL_DIR")
-EOFMOD
-
-    echo "== Successfully built $SOFTWARE/$VERSION"
-    echo "== Installation: $INSTALL_DIR"
-    echo "== Module: $MODULE_DIR/$VERSION-$TOOLCHAIN.lua"
-fi
-EOF
-    chmod +x /usr/local/bin/easybuild
 }
 
 # Create helper scripts
@@ -679,10 +608,38 @@ EOF
     chown vagrant:vagrant /home/vagrant/test_publish.sh
 }
 
+# Prepare VM for container execution
+prepare_for_containers() {
+    log_info "Preparing VM for container execution"
+
+    # Ensure kernel modules are loaded
+    modprobe fuse || log_warning "Failed to load fuse module"
+    modprobe overlay || log_warning "Failed to load overlay module"
+
+    # Make modules persistent
+    echo -e "fuse\noverlay" > /etc/modules-load.d/cvmfs-containers.conf
+
+    # Fix /dev/fuse permissions for containers
+    if [[ -c /dev/fuse ]]; then
+        chmod 666 /dev/fuse
+        # Make it persistent with udev rule
+        echo 'KERNEL=="fuse", MODE="0666"' > /etc/udev/rules.d/99-fuse.rules
+    fi
+
+    # Enable user namespaces for containers
+    echo "user.max_user_namespaces=28633" > /etc/sysctl.d/99-containers.conf
+    sysctl -p /etc/sysctl.d/99-containers.conf >/dev/null 2>&1
+
+    log_success "VM prepared for containers"
+}
+
 # Main execution
 main() {
     # Install packages
     install_packages
+
+    # Prepare for containers
+    prepare_for_containers
 
     # Install and run archspec detection
     install_archspec
@@ -702,9 +659,6 @@ main() {
 
     # Setup GitHub runner with detected architecture
     setup_github_runner
-
-    # Setup mock EasyBuild
-    setup_mock_easybuild
 
     # Create helper scripts
     create_helper_scripts
